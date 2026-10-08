@@ -5,7 +5,15 @@ See your Claude Code usage at a glance on your Mac: how much of your 5-hour and 
 Claude Gauge has two parts that work together:
 
 - **The Mac app** lives in your menu bar, or as a small widget that docks to the edge of your screen. It shows your limits, spend for today, this week and this month, a 30-day chart, your chats, and running agents. It plays a sound and sends a notification when a chat needs your input or finishes. Click the notification to jump straight to that chat.
-- **The Claude Code plugin** (`usage-gauge`) adds a one-line usage bar above the chat box, showing the model and effort, both limits with reset times, and this chat's and today's spend. It also tells the app what each chat is doing.
+- **The Claude Code plugin** (`usage-gauge`) adds a one-line usage bar above the chat box in every Claude Code session: the terminal, IDEs like VS Code and PyCharm, and the Claude desktop app. It shows:
+  - model and effort;
+  - Claude's progress while it works (steps, time, sub-agents done);
+  - both limits with time left;
+  - context fill;
+  - this chat's and today's spend;
+  - the git branch.
+
+  It also tells the app what each chat is doing.
 
 Everything stays on your Mac. The app reads files in `~/.claude`, and nothing is sent anywhere.
 
@@ -39,7 +47,7 @@ In a Claude Code terminal session, run:
 /plugin install usage-gauge --marketplace michael1271k/Claude-Gauge
 ```
 
-Answer `y` to add the marketplace, then choose the **user** scope so the bar appears in every project. New chats show the bar above the input box. Chats already open pick it up after `/reload-plugins` or a restart.
+Answer `y` to add the marketplace, then choose the **user** scope so the bar appears in every project and every place you run Claude Code. New chats show the bar above the input box. Chats already open pick it up after `/reload-plugins` or a restart.
 
 ## Using it
 

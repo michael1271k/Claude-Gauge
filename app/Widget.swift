@@ -15,7 +15,7 @@ enum WidgetForm: String, CaseIterable, Identifiable {
 }
 
 enum WidgetShow: String, CaseIterable, Identifiable {
-  case withClaude = "When Claude is open", always = "Always"
+  case withClaude = "When Claude is in use", always = "Always"
   var id: String { rawValue }
 }
 
@@ -278,6 +278,9 @@ final class FirstClickHostingView<V: View>: NSHostingView<V> {
   let store: Store
   private(set) var instances: [WidgetInstance] = []
   private var claudeRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: claudeBundleID).isEmpty
+  /// A Claude Code chat anywhere (terminal, an IDE, the desktop app) was active in the last 15 minutes.
+  private var chatsActive = false
+  private var claudeInUse: Bool { claudeRunning || chatsActive }
   private var poller: Timer?
   private var clickMonitor: Any?
   private var dragMonitor: Any?
@@ -313,7 +316,7 @@ final class FirstClickHostingView<V: View>: NSHostingView<V> {
   }
 
   private var signature: String {
-    let visible = Prefs.placement == .floating && (Prefs.show == .always || claudeRunning)
+    let visible = Prefs.placement == .floating && (Prefs.show == .always || claudeInUse)
     let ids = visible ? targetScreens.map(WidgetInstance.id(of:)) : []
     return ids.joined(separator: ",") + "|\(Prefs.form.rawValue)|\(Prefs.side.rawValue)"
   }
@@ -326,7 +329,7 @@ final class FirstClickHostingView<V: View>: NSHostingView<V> {
 
   /// Rebuild or update the widgets to match Settings, Claude running, and the connected screens.
   func apply(force: Bool = false) {
-    let visible = Prefs.placement == .floating && (Prefs.show == .always || claudeRunning)
+    let visible = Prefs.placement == .floating && (Prefs.show == .always || claudeInUse)
     let ids = visible ? targetScreens.map(WidgetInstance.id(of:)) : []
     if force || signature != lastSignature {
       lastSignature = signature
@@ -340,7 +343,18 @@ final class FirstClickHostingView<V: View>: NSHostingView<V> {
       i.panel.orderFrontRegardless()
     }
     instances.isEmpty ? stopPolling() : startPolling()
+    activityCheck = activityCheck ?? Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        let active = self.store.chats.contains { self.store.nowMs - $0.at < 15 * 60_000 }
+        if active != self.chatsActive {
+          self.chatsActive = active
+          self.apply()
+        }
+      }
+    }
   }
+  private var activityCheck: Timer?
 
   private func startPolling() {
     guard poller == nil else { return }

@@ -12,6 +12,9 @@ const cwd = atom({ plugin: 'usage-gauge', key: 'cwd' } as const, '')
 // name: the model id the last request used; alias: what $.session.model() said then (a switch shows instantly);
 // effort: the last request's effort, else the chat's or settings' default.
 const model = atom({ plugin: 'usage-gauge', key: 'model' } as const, { name: '', effort: '', alias: '', fallback: '' })
+// The current turn: when it started and how many tool calls it made (the bar's progress).
+const work = atom({ plugin: 'usage-gauge', key: 'work' } as const, { start: 0, steps: 0 })
+const git = atom({ plugin: 'usage-gauge', key: 'git' } as const, { branch: '', changed: 0 })
 const chat = atom({ plugin: 'usage-gauge', key: 'chat' } as const, { state: 'idle', at: 0, label: '', question: '' })
 
 const GREEN = '#40DB80'
@@ -26,7 +29,12 @@ const bar = (p: number, w: number) => {
   const n = Math.max(0, Math.min(w, Math.round((p / 100) * w)))
   return '▰'.repeat(n) + '▱'.repeat(w - n)
 }
-const money = (v: number) => (v >= 100 ? `$${v.toFixed(0)}` : v >= 10 ? `$${v.toFixed(1)}` : `$${v.toFixed(2)}`)
+const money = (v: number) =>
+  v >= 1000 ? `$${Math.round(v).toLocaleString('en-US')}` : v >= 100 ? `$${v.toFixed(0)}` : v >= 10 ? `$${v.toFixed(1)}` : `$${v.toFixed(2)}`
+const elapsed = (ms: number) => {
+  const s = Math.max(0, Math.round(ms / 1000))
+  return s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
+}
 const until = (iso: string | undefined, now: number) => {
   if (!iso) return ''
   const m = Math.max(0, Math.round((Date.parse(iso) - now) / 60000))
@@ -36,10 +44,11 @@ const until = (iso: string | undefined, now: number) => {
 /** "claude-opus-5-5" → "Opus 5.5"; same rule as the app's modelLabel. */
 const modelName = (id: string) => {
   const parts = id.replace('claude-', '').replace(/\[.*\]$/, '').split('-').filter(p => p && p.length < 8)
-  if (!parts.length) return id
-  return parts[0][0].toUpperCase() + parts[0].slice(1) + (parts.length > 1 ? ' ' + parts.slice(1).join('.') : '')
+  const first = parts[0]
+  if (!first) return id
+  return first.charAt(0).toUpperCase() + first.slice(1) + (parts.length > 1 ? ' ' + parts.slice(1).join('.') : '')
 }
-const EFFORT: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' }
+const EFFORT: Record<string, string> = { low: 'Low', medium: 'Med', high: 'High', xhigh: 'XHigh', max: 'Max' }
 const modelColor = (id: string) =>
   id.includes('opus') ? '#B89AFF' : id.includes('haiku') ? GREEN : id.includes('fable') ? '#FF8C73' : CYAN
 
@@ -93,6 +102,19 @@ async function syncShared($: any) {
   await update($, model, m => ({ ...m, fallback: String(fromApp ?? fromSettings ?? '') }))
 }
 
+// Branch and changed-file count, every 10 s (git off the render path).
+async function readGit($: any) {
+  try {
+    const b = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 3000 })
+    if (b.exitCode !== 0) return update($, git, () => ({ branch: '', changed: 0 }))
+    const st = await $.process.run(['git', 'status', '--porcelain'], { timeoutMs: 3000 })
+    const changed = st.stdout.split('\n').filter(Boolean).length
+    await update($, git, () => ({ branch: b.stdout.trim(), changed }))
+  } catch {
+    await update($, git, () => ({ branch: '', changed: 0 }))
+  }
+}
+
 async function refresh($: any, given?: { limits: Limit[]; cost?: number }) {
   const u = given ?? (await $.session.usage().then((x: any) => ({ limits: x.rateLimits, cost: x.cost?.usd })))
   await update($, usd, () => u.cost ?? 0)
@@ -110,8 +132,8 @@ async function setState($: any, state: string, question = '') {
   await writeSession($)
 }
 
-let poll: (() => void) | null = null
-let watch: (() => void) | null = null
+let poll: { cancel: () => void } | null = null
+let watch: { cancel: () => void } | null = null
 let lastSync = 0
 
 export const register: Register = on => {
@@ -120,10 +142,12 @@ export const register: Register = on => {
     const alias = await $.session.model()
     await update($, model, m => ({ ...m, alias, name: '' }))
     void refresh($)
-    // Every 10 s: pick up the newest limits and totals, and answer the app's Sync button.
-    watch?.()
+    void readGit($)
+    // Every 10 s: pick up the newest limits and totals, answer the app's Sync button, re-read git.
+    watch?.cancel()
     watch = $.clock.every(10_000, () => {
       void (async () => {
+        await readGit($)
         const req = await readJSON($, `${await root($)}/sync.json`)
         if (req && Number(req.at) > lastSync) {
           lastSync = Number(req.at)
@@ -160,14 +184,16 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
+    const start = await $.clock.now()
+    await update($, work, () => ({ start, steps: 0 }))
     await setState($, 'working')
-    poll?.()
+    poll?.cancel()
     poll = $.clock.every(2000, () => void refresh($))
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
-    poll?.()
+    poll?.cancel()
     poll = null
     const out = await next(e)
     await setState($, 'done')
@@ -176,6 +202,7 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
+    if (!(e as any).agentId) await update($, work, w => ({ ...w, steps: w.steps + 1 }))
     if (e.tool !== 'AskUserQuestion' && e.tool !== 'ExitPlanMode') return next(e)
     const qs = (e as any).questions
     await setState($, 'waiting', Array.isArray(qs) ? String(qs[0]?.question ?? '') : 'Plan ready for review')
@@ -184,7 +211,7 @@ export const register: Register = on => {
     return out
   })
 
-  // The usage bar above the chat input.
+  // The usage bar above the chat input: one line, most useful first, trimmed on narrow windows.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const ls = await read($, limits)
@@ -197,54 +224,86 @@ export const register: Register = on => {
     const effort = (shown === m.name && m.effort) || m.fallback
     if (!five && !week && !shown) return next(e)
     const now = await $.clock.now()
+    const cols = e.props.bodyColumns ?? 100
     const spentToday = await read($, today)
-    const wide = (e.props.bodyColumns ?? 100) >= 90
+    const c = await read($, chat)
+    const w = await read($, work)
+    const g = await read($, git)
+    const ctx = (await $.session.usage()).context?.percent
+    const agents = c.state === 'working' ? await $.agent.list().catch(() => []) : []
+    const running = agents.filter((a: any) => a.status === 'running' || a.status === 'pending').length
     const { Box, Text } = $.ui.resolve(e)
-    const sep = <Text color={DIM}>│</Text>
+    const sep = <Text color={DIM}> │ </Text>
+    const limit = (label: string, l: Limit, cells: number) => (
+      <Text wrap="truncate-end">
+        <Text color={DIM}>{label} </Text>
+        {cols >= 110 && <Text color={level(l.percentUsed)}>{bar(l.percentUsed, cells)} </Text>}
+        <Text color={level(l.percentUsed)} bold>
+          {Math.round(l.percentUsed)}%
+        </Text>
+        {l.resetsAt && <Text color={DIM}> {until(l.resetsAt, now)}</Text>}
+      </Text>
+    )
     return (
-      <Box flexDirection="row" flexWrap="wrap" columnGap={2} paddingX={1}>
+      <Box flexDirection="row" flexWrap="nowrap" paddingX={1} overflow="hidden">
         {shown && (
-          <Text>
+          <Text wrap="truncate-end">
             <Text color={modelColor(shown)} bold>
               ◆ {modelName(shown)}
             </Text>
-            {effort && <Text color={SOFT}> · {EFFORT[effort] ?? effort} effort</Text>}
+            {effort && <Text color={SOFT}> {EFFORT[effort] ?? effort}</Text>}
           </Text>
         )}
-        {shown && sep}
-        {five && (
-          <Text>
-            <Text color={SOFT}>5h </Text>
-            <Text color={level(five.percentUsed)} bold>
-              {wide ? `${bar(five.percentUsed, 8)} ` : ''}
-              {Math.round(five.percentUsed)}%
+        {c.state === 'working' && w.start > 0 && (
+          <Text wrap="truncate-end">
+            {sep}
+            <Text color={CYAN}>● </Text>
+            <Text color={SOFT}>
+              {w.steps} steps · {elapsed(now - w.start)}
             </Text>
-            {five.resetsAt && <Text color={SOFT}> · {until(five.resetsAt, now)} left</Text>}
+            {agents.length > 0 && (
+              <Text color={SOFT}>
+                {' '}· {agents.length - running}/{agents.length} agents
+              </Text>
+            )}
           </Text>
         )}
-        {week && (
-          <Text>
-            <Text color={SOFT}>Week </Text>
-            <Text color={level(week.percentUsed)} bold>
-              {wide ? `${bar(week.percentUsed, 6)} ` : ''}
-              {Math.round(week.percentUsed)}%
+        {c.state === 'waiting' && (
+          <Text wrap="truncate-end">
+            {sep}
+            <Text color={YELLOW} bold>
+              ● needs you
             </Text>
-            {week.resetsAt && <Text color={SOFT}> · {until(week.resetsAt, now)} left</Text>}
+          </Text>
+        )}
+        {five && sep}
+        {five && limit('5h', five, 5)}
+        {week && sep}
+        {week && limit('Wk', week, 5)}
+        {ctx != null && cols >= 100 && sep}
+        {ctx != null && cols >= 100 && (
+          <Text wrap="truncate-end">
+            <Text color={DIM}>Ctx </Text>
+            <Text color={ctx >= 85 ? RED : ctx >= 65 ? YELLOW : SOFT}>{Math.round(ctx)}%</Text>
           </Text>
         )}
         {sep}
-        <Text>
-          <Text color={SOFT}>This chat </Text>
+        <Text wrap="truncate-end">
           <Text color={CYAN} bold>
             {money(await read($, usd))}
           </Text>
-          {spentToday >= 0 && <Text color={SOFT}> · Today </Text>}
-          {spentToday >= 0 && (
-            <Text color={YELLOW} bold>
-              {money(spentToday)}
-            </Text>
-          )}
+          <Text color={DIM}> chat</Text>
+          {spentToday >= 0 && <Text color={DIM}> · </Text>}
+          {spentToday >= 0 && <Text color={YELLOW}>{money(spentToday)}</Text>}
+          {spentToday >= 0 && <Text color={DIM}> today</Text>}
         </Text>
+        {g.branch && cols >= 130 && sep}
+        {g.branch && cols >= 130 && (
+          <Text wrap="truncate-end" color={SOFT}>
+            ⎇ {g.branch}
+            {g.changed > 0 && <Text color={YELLOW}> +{g.changed}</Text>}
+          </Text>
+        )}
       </Box>
     )
   })

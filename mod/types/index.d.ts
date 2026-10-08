@@ -10,6 +10,8 @@ declare module 'claude-code' {
       cwd: string
       model: { name: string; effort: string; alias: string; fallback: string }
       chat: Chat
+      work: { start: number; steps: number }
+      git: { branch: string; changed: number }
     }
   }
 }
