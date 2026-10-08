@@ -118,6 +118,8 @@ import UserNotifications
       i.button?.target = self
       i.button?.action = #selector(toggle(_:))
       i.button?.toolTip = "Claude Gauge"
+      i.autosaveName = "ClaudeGauge"
+      i.isVisible = true // it is the app's only window into itself; never start hidden
       item = i
       lastKey = ""
       refresh()
