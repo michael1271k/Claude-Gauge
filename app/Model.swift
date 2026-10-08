@@ -85,8 +85,13 @@ struct Chat: Codable, Identifiable, Hashable {
   var displayProject: String { project.isEmpty ? (cwd as NSString).lastPathComponent : project }
 
   /// A chat whose process died mid-turn stops counting as working after 30 minutes.
+  /// When its transcript (or a sub-agent's) was last written: a chat writing in the last 45 s is working,
+  /// even without the plugin, or while background agents run after its turn ended.
+  var touchedAt: Double = 0
+
   func liveState(now: Double) -> ChatState {
-    state == .working && now - stateAt > 30 * 60_000 ? .idle : state
+    if state != .waiting, now - touchedAt < 45_000 { return .working }
+    return state == .working && now - stateAt > 30 * 60_000 ? .idle : state
   }
 
   /// ~/.claude/projects/<cwd with every non-alphanumeric character as "-">/<id>.jsonl
@@ -158,17 +163,17 @@ struct Theme: Identifiable {
   let chart: Color
 
   static let all: [Theme] = [
-    Theme(id: "Ocean", accent: Color(hex: 0x63D1FF), secondary: Color(hex: 0xFFD63F), chart: Color(hex: 0x63D1FF)),
-    Theme(id: "Clay", accent: Color(hex: 0xE08A66), secondary: Color(hex: 0xF3D9C4), chart: Color(hex: 0xD97757)),
-    Theme(id: "Aurora", accent: Color(hex: 0xA78BFA), secondary: Color(hex: 0x5EEAD4), chart: Color(hex: 0x8B7CF6)),
     Theme(id: "Sunset", accent: Color(hex: 0xFF8A65), secondary: Color(hex: 0xF9A8D4), chart: Color(hex: 0xFF7A59)),
+    Theme(id: "Ocean", accent: Color(hex: 0x63D1FF), secondary: Color(hex: 0xFFD63F), chart: Color(hex: 0x63D1FF)),
+    Theme(id: "Lagoon", accent: Color(hex: 0x2DD4BF), secondary: Color(hex: 0xFBBF24), chart: Color(hex: 0x14B8A6)),
+    Theme(id: "Aurora", accent: Color(hex: 0xA78BFA), secondary: Color(hex: 0x5EEAD4), chart: Color(hex: 0x8B7CF6)),
     Theme(id: "Graphite", accent: Color(hex: 0xE5E7EB), secondary: Color(hex: 0xA3A9B3), chart: Color(hex: 0xC4C8CF)),
   ]
 
   /// The theme picked in Settings; "Custom" uses the two colors picked there.
   static var current: Theme {
     let d = UserDefaults.standard
-    let id = d.string(forKey: "theme") ?? "Ocean"
+    let id = d.string(forKey: "theme") ?? "Sunset"
     if id == "Custom" {
       let a = Color(hex: d.object(forKey: "customAccent") as? Int ?? 0x63D1FF)
       return Theme(id: id, accent: a, secondary: Color(hex: d.object(forKey: "customSecondary") as? Int ?? 0xFFD63F), chart: a)
@@ -197,8 +202,15 @@ enum Palette {
   static let hot = Color(red: 1.0, green: 0.33, blue: 0.33)
   static let warn = Color(red: 1, green: 0.84, blue: 0.25)
   static func level(_ pct: Double) -> Color { pct >= 80 ? hot : pct >= 50 ? warn : done }
-  /// A limit in the theme's color until it runs hot: yellow from 75%, red from 90% (same rule as the in-chat bar).
-  static func limit(_ pct: Double, base: Color) -> Color { pct >= 90 ? hot : pct >= 75 ? warn : base }
+  /// A limit in the theme's color: lighter while usage is low, deeper as it climbs, then warming toward
+  /// yellow from 75% and red from 90% (the in-chat bar uses the same thresholds).
+  static func limit(_ pct: Double, base: Color) -> Color {
+    let b = NSColor(base).usingColorSpace(.sRGB) ?? .white
+    if pct >= 90 { return Color(nsColor: b.blended(withFraction: 0.85, of: NSColor(hot)) ?? b) }
+    if pct >= 75 { return Color(nsColor: b.blended(withFraction: 0.6, of: NSColor(warn)) ?? b) }
+    let light = max(0, (50 - pct) / 50) * 0.35 // up to 35% lighter near empty
+    return Color(nsColor: b.blended(withFraction: light, of: .white) ?? b)
+  }
   static func base(for kind: String?) -> Color { kind == "seven_day" ? secondary : accent }
   static func state(_ s: ChatState) -> Color {
     switch s {

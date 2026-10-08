@@ -1,4 +1,4 @@
-// The floating Gauge widget: one glass panel per chosen screen, as an edge belt, a Dock shelf or a floating capsule.
+// The floating Gauge widget: one glass panel per chosen screen, as an edge belt or a floating capsule.
 // The belt shows the limits as nested rings and one bead per running chat; hover a bead to peek at that chat.
 // Drag it anywhere (it follows the pointer 1:1 and glides into place); hover peeks, click opens fully.
 import AppKit
@@ -10,7 +10,7 @@ enum Placement: String, CaseIterable, Identifiable {
 }
 
 enum WidgetForm: String, CaseIterable, Identifiable {
-  case edge = "Edge belt", dock = "Dock shelf", capsule = "Floating"
+  case edge = "Edge belt", capsule = "Floating"
   var id: String { rawValue }
 }
 
@@ -48,11 +48,29 @@ enum Prefs {
   /// SwiftUI's own hover over the card.
   var hovering = false
   var dragging = false
-  /// The chat whose bead is hovered: the peek shows that chat instead of the overview.
+  /// The chat whose bead is hovered: the peek shows that chat instead of the full card.
   var focus: String?
+  /// Size multiplier: Settings → Size, or Auto from the screen (bigger on big displays).
+  var scale: CGFloat = 1
 }
 
-let widgetPanelSize = NSSize(width: 420, height: 760)
+let widgetPanelSize = NSSize(width: 420, height: 820)
+func panelSize(_ scale: CGFloat) -> NSSize { NSSize(width: widgetPanelSize.width * scale, height: widgetPanelSize.height * scale) }
+
+enum WidgetSize: String, CaseIterable, Identifiable {
+  case auto = "Auto", small = "Small", medium = "Medium", large = "Large", xl = "Extra large"
+  var id: String { rawValue }
+  /// Auto grows with the display: 1× on a laptop, up to 1.5× on a large monitor.
+  func scale(for screen: NSScreen?) -> CGFloat {
+    switch self {
+    case .auto: min(1.5, max(1, (screen?.frame.height ?? 900) / 1050))
+    case .small: 0.9
+    case .medium: 1.1
+    case .large: 1.3
+    case .xl: 1.5
+    }
+  }
+}
 let widgetSpring = Animation.spring(response: 0.35, dampingFraction: 1)
 
 final class PassivePanel: NSPanel {
@@ -71,6 +89,7 @@ final class WidgetHostingView<V: View>: NSHostingView<V> {
 
   override func mouseDown(with e: NSEvent) {
     dragged = false
+    window?.orderFrontRegardless() // unpinned, it still comes to the front when you click it
     instance?.pressBegan()
     super.mouseDown(with: e)
   }
@@ -143,9 +162,14 @@ final class WidgetHostingView<V: View>: NSHostingView<V> {
 
   func tap() { set(model.expansion == .full ? .collapsed : .full) }
 
+  /// The card's on-screen rect: its layout frame scaled around its anchor (see WidgetRoot's scaleEffect).
   func contentScreenRect() -> CGRect {
-    let f = model.contentFrame
-    return CGRect(x: panel.frame.minX + f.minX, y: panel.frame.maxY - f.maxY, width: f.width, height: f.height)
+    let f = model.contentFrame, s = model.scale
+    let ax: CGFloat = model.anchor.horizontal == .leading ? 0 : model.anchor.horizontal == .trailing ? 1 : 0.5
+    let ay: CGFloat = model.anchor.vertical == .top ? 0 : model.anchor.vertical == .bottom ? 1 : 0.5
+    let w = f.width * s, h = f.height * s
+    let minX = f.minX + ax * f.width - ax * w, minY = f.minY + ay * f.height - ay * h
+    return CGRect(x: panel.frame.minX + minX, y: panel.frame.maxY - (minY + h), width: w, height: h)
   }
 
   /// Polled ~12×/s. Open on hover, stay open while the pointer is anywhere on the card.
@@ -202,10 +226,10 @@ final class WidgetHostingView<V: View>: NSHostingView<V> {
   private func isHandle(_ mouse: NSPoint) -> Bool {
     let r = contentScreenRect()
     guard r.contains(mouse) else { return false }
-    return model.expansion != .full || mouse.y > r.maxY - 52
+    return model.expansion == .collapsed || mouse.y > r.maxY - 52 * model.scale
   }
 
-  /// Near the left or right edge: the belt docks there. Near the bottom: the Dock shelf. Anywhere else: floats.
+  /// Near the left or right edge: the belt docks there. Anywhere else: floats.
   private func drop(at mouse: NSPoint) {
     let others = NSScreen.screens.first { $0.frame.contains(mouse) }
     let target = Prefs.screens == "all" ? (screen ?? others) : (others ?? screen)
@@ -218,9 +242,6 @@ final class WidgetHostingView<V: View>: NSHostingView<V> {
       d.set((c.midY - vis.minY) / vis.height, forKey: "edgeY.\(id)")
       d.set((c.midX < vis.midX ? EdgeSide.left : .right).rawValue, forKey: "edgeSide")
       d.set(WidgetForm.edge.rawValue, forKey: "widgetForm")
-    } else if c.minY - vis.minY < 60 {
-      d.set((c.midX - vis.minX) / vis.width, forKey: "dockX.\(id)")
-      d.set(WidgetForm.dock.rawValue, forKey: "widgetForm")
     } else {
       d.set([(c.minX - vis.minX) / vis.width, (c.minY - vis.minY) / vis.height], forKey: "capsule.\(id)")
       d.set(WidgetForm.capsule.rawValue, forKey: "widgetForm")
@@ -247,21 +268,29 @@ final class WidgetHostingView<V: View>: NSHostingView<V> {
 
   private func frame(content c: CGRect) -> NSRect {
     let pad = WidgetRoot.padding, a = model.anchor
-    let x = a.horizontal == .leading ? c.minX - pad : a.horizontal == .trailing ? c.maxX + pad - widgetPanelSize.width : c.midX - widgetPanelSize.width / 2
-    let y = a.vertical == .top ? c.maxY + pad - widgetPanelSize.height : a.vertical == .bottom ? c.minY - pad : c.midY - widgetPanelSize.height / 2
-    return NSRect(origin: NSPoint(x: x, y: y), size: widgetPanelSize)
+    let size = panelSize(model.scale)
+    let x = a.horizontal == .leading ? c.minX - pad : a.horizontal == .trailing ? c.maxX + pad - size.width : c.midX - size.width / 2
+    let y = a.vertical == .top ? c.maxY + pad - size.height : a.vertical == .bottom ? c.minY - pad : c.midY - size.height / 2
+    return NSRect(origin: NSPoint(x: x, y: y), size: size)
   }
 
   /// Puts the widget where its form and saved position say; `animated` glides it there.
   func place(animated: Bool = false) {
     guard let screen else { return }
     let vis = screen.visibleFrame
-    let measured = model.expansion == .collapsed ? model.contentFrame.size : .zero
+    let scale = (WidgetSize(rawValue: Prefs.d.string(forKey: "widgetSize") ?? "") ?? .auto).scale(for: screen)
+    if scale != model.scale {
+      var t = Transaction()
+      t.disablesAnimations = true
+      withTransaction(t) { model.scale = scale }
+    }
+    let raw = model.expansion == .collapsed ? model.contentFrame.size : .zero
+    let measured = CGSize(width: raw.width * scale, height: raw.height * scale)
     let anchor: Alignment
     let content: CGRect
     switch Prefs.form {
     case .capsule:
-      let size = measured.width > 0 && measured.width < 200 ? measured : CGSize(width: 110, height: 34)
+      let size = measured.width > 0 && measured.width < 200 * scale ? measured : CGSize(width: 110 * scale, height: 34 * scale)
       let saved = Prefs.d.array(forKey: "capsule.\(screenID)") as? [Double]
       var c = CGRect(x: saved.map { vis.minX + $0[0] * vis.width } ?? vis.maxX - 12 - size.width,
                      y: saved.map { vis.minY + $0[1] * vis.height } ?? vis.maxY - 12 - size.height,
@@ -273,19 +302,13 @@ final class WidgetHostingView<V: View>: NSHostingView<V> {
       content = c
     case .edge:
       let right = Prefs.side == .right
-      let size = measured.width > 0 && measured.width < 90 ? measured : CGSize(width: 66, height: 120)
+      let size = measured.width > 0 && measured.width < 90 * scale ? measured : CGSize(width: 66 * scale, height: 120 * scale)
       let f = Prefs.d.object(forKey: "edgeY.\(screenID)") as? Double ?? 0.62
       let cy = min(max(vis.minY + f * vis.height, vis.minY + size.height / 2 + 6), vis.maxY - size.height / 2 - 6)
       // The open card grows down from a belt in the top third, up from one in the bottom third, else both ways.
       let third = (cy - vis.minY) / vis.height
       anchor = Alignment(horizontal: right ? .trailing : .leading, vertical: third > 0.66 ? .top : third < 0.34 ? .bottom : .center)
       content = CGRect(x: right ? vis.maxX - size.width : vis.minX, y: cy - size.height / 2, width: size.width, height: size.height)
-    case .dock:
-      let size = measured.height > 0 && measured.height < 90 ? measured : CGSize(width: 200, height: 66)
-      let f = Prefs.d.object(forKey: "dockX.\(screenID)") as? Double ?? 0.5
-      let cx = min(max(vis.minX + f * vis.width, vis.minX + size.width / 2 + 6), vis.maxX - size.width / 2 - 6)
-      anchor = .bottom
-      content = CGRect(x: cx - size.width / 2, y: vis.minY + 6, width: size.width, height: size.height)
     }
     reanchor(anchor)
     let target = frame(content: content)
@@ -347,7 +370,14 @@ final class WidgetHostingView<V: View>: NSHostingView<V> {
   private var signature: String {
     let visible = Prefs.placement == .floating && (Prefs.show == .always || claudeInUse)
     let ids = visible ? targetScreens.map(WidgetInstance.id(of:)) : []
-    return ids.joined(separator: ",") + "|\(Prefs.form.rawValue)|\(Prefs.side.rawValue)"
+    return ids.joined(separator: ",") + "|\(Prefs.form.rawValue)|\(Prefs.side.rawValue)|\(Prefs.d.string(forKey: "widgetSize") ?? "")"
+  }
+
+  /// ⌥⌘G: opens the full card on every widget (held open), or closes it.
+  func toggleFull() {
+    let open = instances.contains { $0.model.expansion == .full }
+    instances.forEach { $0.set(open ? .collapsed : .full) }
+    instances.forEach { $0.panel.orderFrontRegardless() }
   }
 
   /// After a drop: the moved widget placed itself (animated); the others follow the new form without a jump.
@@ -431,7 +461,7 @@ struct WidgetRoot: View {
   let instance: WidgetInstance
   @AppStorage("widgetForm") private var formRaw = WidgetForm.edge.rawValue
   @AppStorage("edgeSide") private var sideRaw = EdgeSide.right.rawValue
-  @AppStorage("theme") private var theme = "Ocean"
+  @AppStorage("theme") private var theme = "Sunset"
 
   private var form: WidgetForm { WidgetForm(rawValue: formRaw) ?? .edge }
   private var unitAnchor: UnitPoint {
@@ -444,10 +474,11 @@ struct WidgetRoot: View {
       Color.clear
       card
         .background(GeometryReader { g in Color.clear.preference(key: ContentFrameKey.self, value: g.frame(in: .global)) })
+        .scaleEffect(model.scale, anchor: unitAnchor)
         .onHover { model.hovering = $0 }
     }
     .padding(Self.padding)
-    .frame(width: widgetPanelSize.width, height: widgetPanelSize.height)
+    .frame(width: panelSize(model.scale).width, height: panelSize(model.scale).height)
     .onPreferenceChange(ContentFrameKey.self) { model.contentFrame = $0 }
     .environment(\.colorScheme, .dark)
     .tint(Palette.accent)
@@ -459,10 +490,11 @@ struct WidgetRoot: View {
       switch model.expansion {
       case .collapsed: collapsed
       case .peek:
+        // Hovering a bead peeks at that chat; hovering anything else shows the full card until the pointer leaves.
         if let id = model.focus, let chat = store.chats.first(where: { $0.id == id }) {
           ChatPeek(chat: chat, store: store).frame(width: 360)
         } else {
-          PeekCard(store: store).frame(width: 360)
+          FullCard(store: store, instance: instance).frame(width: 360)
         }
       case .full: FullCard(store: store, instance: instance).frame(width: 360)
       }
@@ -487,8 +519,6 @@ struct WidgetRoot: View {
       .padding(.horizontal, 11).padding(.vertical, 8)
     case .edge:
       AgentBelt(store: store, model: model, vertical: true)
-    case .dock:
-      AgentBelt(store: store, model: model, vertical: false)
     }
   }
 }
@@ -530,6 +560,18 @@ struct AgentBelt: View {
     .padding(vertical ? .vertical : .horizontal, 12)
     .padding(vertical ? .horizontal : .vertical, 6)
     .frame(width: vertical ? 66 : nil, height: vertical ? nil : 66)
+    .overlay {
+      // Over today's budget: a slow red glow around the belt.
+      if store.overBudget {
+        TimelineView(.animation(minimumInterval: 1 / 20, paused: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)) { tl in
+          let p = 0.5 + 0.5 * sin(tl.date.timeIntervalSinceReferenceDate * 2)
+          RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Palette.hot.opacity(0.4 + 0.5 * p), lineWidth: 2)
+            .shadow(color: Palette.hot.opacity(0.6 * p), radius: 8)
+        }
+        .allowsHitTesting(false)
+        .help("Over today's budget")
+      }
+    }
     .animation(widgetSpring, value: chats.map(\.id))
   }
 }
@@ -611,41 +653,9 @@ private struct CardChrome: ViewModifier {
     case .edge:
       content.glassCard(corners: side == .right ? .init(topLeading: r, bottomLeading: r, bottomTrailing: 0, topTrailing: 0)
                                                 : .init(topLeading: 0, bottomLeading: 0, bottomTrailing: r, topTrailing: r), tint: tint)
-    case .dock:
-      content.glassCard(radius: collapsed ? 18 : 20, tint: tint)
     case .capsule:
       content.glassCard(radius: collapsed ? 18 : 20, tint: tint)
     }
-  }
-}
-
-/// Hovering the rings or the capsule: limits with their pace forecast, and the chat that matters most.
-struct PeekCard: View {
-  let store: Store
-  var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack(spacing: 8) {
-        LiveMark(store: store).frame(width: 26, height: 26)
-        Text("Claude Gauge").font(.system(size: 15, weight: .semibold))
-        Spacer()
-        StateBadge(glow: store.glow)
-      }
-      VStack(spacing: 6) {
-        LimitBar(title: "5-hour", limit: store.five)
-        LimitBar(title: "Weekly", limit: store.week)
-      }
-      VStack(alignment: .leading, spacing: 3) {
-        ForEach([store.five, store.week].compactMap { $0 }, id: \.kind) { l in
-          if let f = l.forecast() {
-            Label(f.text, systemImage: f.risky ? "exclamationmark.triangle.fill" : "speedometer")
-              .font(.system(size: 11.5)).foregroundStyle(f.risky ? Palette.hot : Palette.accent.opacity(0.9))
-          }
-        }
-      }
-      if let c = store.rankedChats.first { ChatRow(chat: c, store: store, highlight: true).padding(.horizontal, -8) }
-      Text("Click for details").font(.system(size: 10)).foregroundStyle(.tertiary).frame(maxWidth: .infinity)
-    }
-    .padding(14)
   }
 }
 
@@ -735,12 +745,20 @@ struct FullCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 11) {
       Header(store: store) {
-        IconButton(symbol: "chevron.compact.up", hint: "Collapse") { instance.set(.collapsed) }
-          .font(.system(size: 14, weight: .semibold))
+        Button { instance.set(.collapsed) } label: {
+          Image(systemName: "arrow.down.right.and.arrow.up.left").font(.system(size: 10, weight: .bold))
+            .foregroundStyle(Palette.accent)
+            .frame(width: 24, height: 24)
+            .background(Circle().fill(Palette.accent.opacity(0.16)))
+            .overlay(Circle().strokeBorder(Palette.accent.opacity(0.3), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain).help("Collapse").accessibilityLabel("Collapse")
       }
       TabSwitch(tab: $tab, agents: store.agentChats.count)
       if tab == GaugeTab.agents.rawValue {
         AgentsView(store: store)
+      } else if tab == GaugeTab.projects.rawValue {
+        ProjectsView(store: store)
       } else {
         LimitsView(store: store, ringSize: 58)
         SpendChart(store: store, days: 30)

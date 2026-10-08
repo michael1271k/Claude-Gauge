@@ -149,6 +149,11 @@ async function refresh($: any, given?: { limits: Limit[]; cost?: number }) {
 }
 
 // working | waiting (Claude asked the user something) | done (turn finished) | idle
+async function runningAgents($: any) {
+  const list = await $.agent.list().catch(() => [])
+  return list.filter((a: any) => a.status === 'running' || a.status === 'pending').length
+}
+
 async function setState($: any, state: string, question = '') {
   const at = await $.clock.now()
   await update($, chat, c => ({ ...c, state, at, question }))
@@ -156,6 +161,8 @@ async function setState($: any, state: string, question = '') {
 }
 
 let poll: { cancel: () => void } | null = null
+let inbox: { cancel: () => void } | null = null
+let turnActive = false
 let pulse: { cancel: () => void } | null = null
 let watch: { cancel: () => void } | null = null
 let lastSync = 0
@@ -168,11 +175,25 @@ export const register: Register = on => {
     void refresh($)
     void readGit($)
     void launchApp($)
+    // Prompts sent from the app's Prompt Pad: `send` submits it as you, `draft` puts it in the prompt box.
+    inbox?.cancel()
+    inbox = $.clock.every(2000, () => {
+      void (async () => {
+        const path = `${await root($)}/inbox/${await $.session.id()}.json`
+        const msg = await readJSON($, path)
+        if (!msg?.text || msg.handled) return
+        await $.fs.write(path, JSON.stringify({ ...msg, handled: true }))
+        if (msg.mode === 'draft') await $.prompt.fill({ text: String(msg.text), mode: 'replace' })
+        else await $.prompt.submit({ text: String(msg.text), asUser: true })
+      })()
+    })
     // Every 10 s: pick up the newest limits and totals, answer the app's Sync button, re-read git.
     watch?.cancel()
     watch = $.clock.every(10_000, () => {
       void (async () => {
         await readGit($)
+        // Background sub-agents finished after the turn ended: now it's done.
+        if (!turnActive && (await read($, chat)).state === 'working' && (await runningAgents($)) === 0) await setState($, 'done')
         const req = await readJSON($, `${await root($)}/sync.json`)
         if (req && Number(req.at) > lastSync) {
           lastSync = Number(req.at)
@@ -209,6 +230,7 @@ export const register: Register = on => {
   })
 
   on('turn.start', async ($, e, next) => {
+    turnActive = true
     const start = await $.clock.now()
     await update($, work, () => ({ start, steps: 0 }))
     await setState($, 'working')
@@ -225,7 +247,9 @@ export const register: Register = on => {
     pulse?.cancel()
     pulse = null
     const out = await next(e)
-    await setState($, 'done')
+    turnActive = false
+    // Background sub-agents still running: the chat is still working until they finish.
+    await setState($, (await runningAgents($)) > 0 ? 'working' : 'done')
     await refresh($)
     return out
   })
@@ -261,7 +285,13 @@ export const register: Register = on => {
     const c = await read($, chat)
     const w = await read($, work)
     const g = await read($, git)
-    const ctx = (await $.session.usage()).context?.percent
+    const usage = await $.session.usage()
+    const ctx = usage.context?.percent
+    const ctxTokens = usage.context?.tokens
+    const ctxWindow = usage.context?.window
+    const chatUsd = await read($, usd)
+    const hours = (now - (usage.startedAt ?? now)) / 3_600_000
+    const rate = hours > 0.25 ? chatUsd / hours : 0
     const agents = c.state === 'working' ? await $.agent.list().catch(() => []) : []
     const running = agents.filter((a: any) => a.status === 'running' || a.status === 'pending').length
     const { Box, Text } = $.ui.resolve(e)
@@ -269,7 +299,8 @@ export const register: Register = on => {
 
     // A thin track filled to the usage, with a tick where the window's time is: fill past the tick = burning fast.
     const meter = (label: string, l: Limit, base: string) => {
-      const cells = cols >= 120 ? 10 : cols >= 100 ? 6 : 0
+      // The meters take the room the line has: wider windows get longer, finer tracks.
+      const cells = cols < 100 ? 0 : Math.max(8, Math.min(22, Math.floor((cols - 110) / 5)))
       const fill = Math.round((Math.min(100, l.percentUsed) / 100) * cells)
       const t = passed(l, now)
       const at = t < 0 ? -1 : Math.min(cells - 1, Math.round(t * cells))
@@ -338,7 +369,13 @@ export const register: Register = on => {
         {ctx != null && cols >= 100 && (
           <Text wrap="truncate-end" color={ctx >= 85 ? RED : ctx >= 65 ? YELLOW : SOFT}>
             {pie(ctx)} <Text color={DIM}>ctx </Text>
-            {Math.round(ctx)}%
+            <Text bold>{Math.round(ctx)}%</Text>
+            {ctxTokens != null && ctxWindow != null && cols >= 140 && (
+              <Text color={DIM}>
+                {' '}
+                {Math.round(ctxTokens / 1000)}k/{Math.round(ctxWindow / 1000)}k
+              </Text>
+            )}
           </Text>
         )}
       </Box>
@@ -348,9 +385,10 @@ export const register: Register = on => {
       <Box flexDirection="row" flexWrap="nowrap" flexShrink={0}>
         <Text wrap="truncate-end">
           <Text color={accent} bold>
-            {money(await read($, usd))}
+            {money(chatUsd)}
           </Text>
           <Text color={DIM}> chat</Text>
+          {rate > 0 && cols >= 150 && <Text color={DIM}> · {money(rate)}/h</Text>}
           {spentToday >= 0 && <Text color={DIM}>{'  '}</Text>}
           {spentToday >= 0 && (
             <Text color={secondary} bold>

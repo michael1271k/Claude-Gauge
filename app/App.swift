@@ -24,6 +24,10 @@ import UserNotifications
     store.load()
     widget = WidgetController(store: store)
     statusBar = StatusBar(store: store)
+    Hotkeys.shared.install(gauge: { [weak self] in
+      guard let self else { return }
+      Prefs.placement == .menuBar ? self.statusBar.toggle() : self.widget.toggleFull()
+    }, pad: { Windows.showPad() })
     Task {
       var lastLoad = Date.distantPast
       while !Task.isCancelled {
@@ -116,7 +120,7 @@ import UserNotifications
     if wanted, item == nil {
       let i = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
       i.button?.target = self
-      i.button?.action = #selector(toggle(_:))
+      i.button?.action = #selector(clicked(_:))
       i.button?.toolTip = "Claude Gauge"
       i.autosaveName = "ClaudeGauge"
       i.isVisible = true // it is the app's only window into itself; never start hidden
@@ -142,12 +146,15 @@ import UserNotifications
     button.image = menuBarImage(store, style: style)
   }
 
-  @objc private func toggle(_ sender: NSStatusBarButton) {
+  @objc private func clicked(_ sender: NSStatusBarButton) { toggle() }
+
+  func toggle() {
+    guard let button = item?.button else { return }
     if popover.isShown {
-      popover.performClose(sender)
+      popover.performClose(nil)
     } else {
       NSApp.activate()
-      popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+      popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
       popover.contentViewController?.view.window?.makeKey()
     }
   }
@@ -178,19 +185,18 @@ import UserNotifications
   writePNG(dark(AnyView(LazyVGrid(columns: Array(repeating: GridItem(.fixed(56)), count: 4), spacing: 16) { ForEach(marks.indices, id: \.self) { marks[$0] } }
     .padding(20).background(Color(white: 0.08)))), to: "\(dir)/marks.png")
   store.setSample(.waiting)
-  writePNG(dark(AnyView(PeekCard(store: store).frame(width: 300).glassCard(tint: Palette.waiting).padding(24).background(Color(white: 0.3)))), to: "\(dir)/peek.png")
   writePNG(dark(AnyView(MenuPanel(store: store).background(Color(white: 0.12)))), to: "\(dir)/panel.png")
   store.setSample(.working)
   let belt = WidgetModel()
   writePNG(dark(AnyView(HStack(alignment: .top, spacing: 18) {
     AgentBelt(store: store, model: belt, vertical: true).glassCard(radius: 14)
-    AgentBelt(store: store, model: belt, vertical: false).glassCard(radius: 18)
     VStack(spacing: 12) {
       ChatPeek(chat: store.chats[0], store: store).frame(width: 300).glassCard(radius: 20)
-      PeekCard(store: store).frame(width: 300).glassCard(radius: 20)
+      AgentsView(store: store).frame(width: 360).padding(14).glassCard(radius: 20)
     }
   }.padding(20).background(Color(white: 0.3)))), to: "\(dir)/belt.png")
-  writePNG(dark(AnyView(PromptPad().frame(width: 380, height: 300).background(Color(white: 0.12)))), to: "\(dir)/pad.png")
+  writePNG(dark(AnyView(PromptPad().frame(width: 520, height: 300).background(Color(white: 0.12)))), to: "\(dir)/pad.png")
+  writePNG(dark(AnyView(ProjectsView(store: store).frame(width: 360).padding(14).background(Color(white: 0.12)))), to: "\(dir)/projects.png")
   writePNG(dark(AnyView(VStack(spacing: 14) {
     AgentsView(store: store)
     ForEach(LimitsStyle.allCases) { st in
@@ -223,8 +229,10 @@ extension Store {
     }
     s.updatedAt = now - 60_000
     s.limits = limits
-    s.spend = ["a": ChatSpend(byDay: [dayKey(.now): 1.2], total: 1.84, model: "claude-opus-5-5", effort: "high"),
-               "b": ChatSpend(byDay: [dayKey(.now): 0.42], total: 0.42, model: "claude-haiku-4-5-20251001", effort: "medium")]
+    let y = dayKey(Calendar.current.date(byAdding: .day, value: -1, to: .now)!)
+    s.spend = ["a": ChatSpend(byDay: [dayKey(.now): 1.2, y: 4.1], total: 5.3, model: "claude-opus-5-5", effort: "high", cwd: "/Users/me/Code/atlas"),
+               "b": ChatSpend(byDay: [dayKey(.now): 0.42], total: 0.42, model: "claude-haiku-4-5-20251001", effort: "medium", cwd: "/Users/me/Code/notes"),
+               "d": ChatSpend(byDay: [y: 2.6, dayKey(.now): 0.6], total: 3.2, model: "claude-sonnet-5-5", effort: "xhigh", cwd: "/Users/me/Code/api")]
     let now2 = Date()
     s.activity["a"] = Activity(prompt: "Fix the login redirect loop and add a regression test for the OAuth callback", promptAt: now2.addingTimeInterval(-840),
       doing: "Editing AuthCallback.swift", recent: ["Reading AuthCallback.swift", "Running the auth tests", "Editing AuthCallback.swift"], tools: 37, agents: [

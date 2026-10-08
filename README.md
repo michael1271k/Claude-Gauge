@@ -56,12 +56,12 @@ Answer `y` to add the marketplace, then choose the **user** scope so the bar app
 - **Menu bar or floating:** click the menu bar icon for the full panel. Click the float button to put Claude Gauge on your screen instead. It is always in one place at a time.
 - **Widget:** drag it anywhere; it follows the pointer and glides into place.
   - Near the left or right edge it becomes the **edge belt**: nested rings for your limits (weekly outside, 5-hour inside) and one bead per running chat.
-  - Near the bottom it becomes the **Dock shelf**, the same belt laid out horizontally.
   - Anywhere else it floats.
   - Drop it on another display and it moves there.
-  - Hover the rings for limits and a pace forecast ("Weekly runs out around Sat 2:17 at this pace").
+  - Hover it and the full card opens; move away and it closes; click to keep it open.
   - Hover a bead to peek at that chat: its last steps while it runs, or its question and answer choices when it needs you (picking one copies it and opens the chat).
-  - Click for the full card. **Keep it open** in the toolbar holds the card open.
+  - **Keep it open** in the toolbar holds the card open. Clicking an unpinned widget brings it to the front.
+  - **Size** (Settings): Auto grows with your display, or pick Small to Extra large.
 - **Overview tab:**
   - your limits, as rings, bars, bars with a time marker, or nested rings;
   - Today, Week and Month spend, plus a 30-day chart (hover a bar for that day);
@@ -69,13 +69,17 @@ Answer `y` to add the marketplace, then choose the **user** scope so the bar app
   - Click a chat to open it in Claude.
   - Drag a row up or down to reorder.
   - Drag a row left, or right-click it, to pin or hide it.
-- **Agents tab:** every running chat, with what it was asked to do, what it is doing right now, its sub-agents, and a time estimate when one is possible.
+- **Agents tab:** every running chat (including chats opened before the plugin was installed, and background sub-agents still working after a turn), with what it is doing right now in large type, its latest request, its last steps, its sub-agents, and a time estimate when one is possible.
+- **Projects tab:** this week's spend per project (the chat's folder), today's share, and a 14-day sparkline.
 - **Prompt Pad** (note icon next to the tabs): sticky notes for prompts you want to send later.
   - **+** makes an empty note in a random color; the clipboard button makes one from what you copied.
   - Click a note to edit it in place; the buttons on its corner copy or delete it.
   - Show notes as a grid, a list, or a horizontal strip.
-  - Drag notes to reorder them.
+  - Drag notes to reorder them; search them from the title bar.
+  - **Send to a chat:** the paper plane on a note sends it to a chat as your message, or puts it in that chat's prompt box for you to review.
 - **Sync:** the circular-arrows button asks every open chat to re-read its usage right away.
+- **Shortcuts:** ⌥⌘G shows or hides Claude Gauge, ⌥⌘P opens the Prompt Pad, from any app.
+- **Daily budget** (Settings → Spend): past it, the belt glows red and you get one notification that day. A recap of last week arrives on the first day of each week.
 - **Settings:** where the widget lives and on which screens; appearance themes and custom colors; the menu bar icon style; limit style; per-state sounds and notifications; and which day the week starts on.
 
 ## How spend is counted

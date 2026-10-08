@@ -8,6 +8,8 @@ struct ChatSpend: Sendable {
   /// Model and effort of the chat's latest reply, e.g. "claude-opus-5-5", "xhigh".
   var model = ""
   var effort = ""
+  /// The chat's working directory (its project).
+  var cwd = ""
 }
 
 actor Ledger {
@@ -20,9 +22,12 @@ actor Ledger {
     var cost: [String: Double] = [:]
     var model = ""
     var effort = ""
+    var cwd = ""
   }
 
   private var files: [String: FileState] = [:]
+  /// Recently written transcripts: session → (working directory, last write), including sub-agents' files.
+  private(set) var touched: [String: (cwd: String, at: Date)] = [:]
   /// Session → day → USD. Persisted so chats whose transcripts are deleted keep their history.
   private var saved: [String: [String: Double]]
   private let savedURL = gaugeDir.appending(path: "ledger.json")
@@ -37,7 +42,7 @@ actor Ledger {
   }
 
   /// `live`: running chats' totals from the mod, which can be newer than their last cost-state line.
-  func scan(live: [String: Double]) -> (days: [String: Double], chats: [String: ChatSpend]) {
+  func scan(live: [String: Double]) -> (days: [String: Double], chats: [String: ChatSpend], touched: [String: (cwd: String, at: Date)]) {
     let fm = FileManager.default
     let cutoff = Date().addingTimeInterval(-40 * 86_400)
     var chats: [String: ChatSpend] = [:]
@@ -50,6 +55,8 @@ actor Ledger {
         let paths = [f.path] + subagents.map(\.path)
         paths.forEach(read)
         guard let main = files[f.path] else { continue }
+        let last = ([m] + subagents.compactMap(mtime)).max() ?? m
+        if Date().timeIntervalSince(last) < 2 * 3600 { touched[id] = (main.cwd, last) } else { touched[id] = nil }
         var weights: [String: [String: Double]] = [:]
         for p in paths {
           for r in files[p].map({ Array($0.replies.values) }) ?? [] { weights[r.model, default: [:]][r.day, default: 0] += r.weight }
@@ -61,13 +68,13 @@ actor Ledger {
         }
         let byDay = Ledger.allocate(cost: cost, weights: weights)
         saved[id] = byDay
-        chats[id] = ChatSpend(byDay: byDay, total: byDay.values.reduce(0, +), model: main.model, effort: main.effort)
+        chats[id] = ChatSpend(byDay: byDay, total: byDay.values.reduce(0, +), model: main.model, effort: main.effort, cwd: main.cwd)
       }
     }
     persist()
     var days: [String: Double] = [:]
     for byDay in saved.values { for (d, v) in byDay { days[d, default: 0] += v } }
-    return (days, chats)
+    return (days, chats, touched)
   }
 
   /// Spreads each model's cost over the days its replies happened, by token weight.
@@ -132,6 +139,7 @@ actor Ledger {
     st.replies[key] = Reply(model: model, day: dayKey(date), weight: Self.weight(u))
     if !model.hasPrefix("<") { st.model = model }
     if let e = o["effort"] as? String { st.effort = e }
+    if let c = o["cwd"] as? String { st.cwd = c }
   }
 
   private func json(_ d: Data) -> [String: Any]? { (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] }

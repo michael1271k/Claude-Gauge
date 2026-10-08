@@ -25,6 +25,8 @@ import UserNotifications
   private var lastActivity = Date.distantPast
 
   private let ledger = Ledger()
+  /// Transcripts written in the last two hours (from the ledger), so chats show up even without the plugin.
+  private var touched: [String: (cwd: String, at: Date)] = [:]
   private var scanning = false
   private var lastScan = Date.distantPast
   private var lastStates: [String: ChatState]?
@@ -59,6 +61,72 @@ import UserNotifications
   var thisWeek: Double { spent(since: Self.calendar.dateInterval(of: .weekOfYear, for: .now)?.start ?? .now) }
   /// Since the 1st of this month.
   var thisMonth: Double { spent(since: Self.calendar.dateInterval(of: .month, for: .now)?.start ?? .now) }
+
+  // MARK: Budget and recap
+
+  /// Settings → Spend → Daily budget; 0 is off.
+  var dailyBudget: Double { UserDefaults.standard.double(forKey: "dailyBudget") }
+  var overBudget: Bool { dailyBudget > 0 && today > dailyBudget }
+
+  /// Once a day when today's spend passes the budget, and once a week (on the first day of the week) a recap.
+  private func checkBudgetAndRecap() {
+    let d = UserDefaults.standard
+    let key = dayKey(.now)
+    if overBudget, d.string(forKey: "budgetAlerted") != key {
+      d.set(key, forKey: "budgetAlerted")
+      notify(title: "Over today's budget", body: "\(Format.money(today)) spent today; your budget is \(Format.money(dailyBudget)).", id: nil)
+    }
+    let cal = Self.calendar
+    guard let week = cal.dateInterval(of: .weekOfYear, for: .now), cal.isDateInToday(week.start),
+          d.string(forKey: "recapSent") != key, !days.isEmpty,
+          let last = cal.date(byAdding: .day, value: -7, to: week.start) else { return }
+    d.set(key, forKey: "recapSent")
+    let total = days.filter { $0.date >= last && $0.date < week.start }.reduce(0) { $0 + $1.usd }
+    let top = projects(since: last, until: week.start).first
+    notify(title: "Your week with Claude", body: "\(Format.money(total)) last week" + (top.map { ", most on \($0.name) (\(Format.money($0.usd)))." } ?? "."), id: nil)
+  }
+
+  private func notify(title: String, body: String, id: String?) {
+    guard UserDefaults.standard.object(forKey: "notificationsOn") as? Bool ?? true else { return }
+    let n = UNMutableNotificationContent()
+    n.title = title
+    n.body = body
+    if let id { n.userInfo = ["session": id] }
+    UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: n, trigger: nil))
+  }
+
+  // MARK: Projects
+
+  struct ProjectSpend: Identifiable {
+    let name: String
+    var usd: Double
+    var today: Double
+    var chats: Int
+    /// The last 14 days, oldest first.
+    var daily: [Double]
+    var id: String { name }
+  }
+
+  /// Spend per project (the chat's folder) between two dates, most expensive first.
+  func projects(since start: Date, until end: Date = .distantFuture) -> [ProjectSpend] {
+    let cal = Calendar.current
+    let keys14 = (0..<14).reversed().map { dayKey(cal.date(byAdding: .day, value: -$0, to: .now)!) }
+    let startKey = dayKey(start), endKey = end == .distantFuture ? "9999" : dayKey(end)
+    var out: [String: ProjectSpend] = [:]
+    for (id, sp) in spend {
+      let cwd = sp.cwd.isEmpty ? chats.first { $0.id == id }?.cwd ?? "" : sp.cwd
+      guard !cwd.isEmpty else { continue }
+      let name = (cwd as NSString).lastPathComponent
+      let inRange = sp.byDay.filter { $0.key >= startKey && $0.key < endKey }.values.reduce(0, +)
+      var p = out[name] ?? ProjectSpend(name: name, usd: 0, today: 0, chats: 0, daily: Array(repeating: 0, count: 14))
+      p.usd += inRange
+      p.today += sp.byDay[dayKey(.now)] ?? 0
+      if inRange > 0 { p.chats += 1 }
+      for (i, k) in keys14.enumerated() { p.daily[i] += sp.byDay[k] ?? 0 }
+      out[name] = p
+    }
+    return out.values.filter { $0.usd > 0.005 }.sorted { $0.usd > $1.usd }
+  }
 
   func todaySpend(_ c: Chat) -> Double { spend[c.id]?.byDay[dayKey(.now)] ?? 0 }
   func totalSpend(_ c: Chat) -> Double { max(c.usd, spend[c.id]?.total ?? 0) }
@@ -95,7 +163,16 @@ import UserNotifications
     let files = (try? FileManager.default.contentsOfDirectory(at: gaugeDir.appending(path: "sessions"), includingPropertiesForKeys: nil)) ?? []
     let weekAgo = nowMs - 7 * 86_400_000
     var loaded = files.compactMap { try? dec.decode(Chat.self, from: Data(contentsOf: $0)) }.filter { $0.at > weekAgo || pinned.contains($0.id) }
-    for i in loaded.indices { loaded[i].title = title(for: loaded[i]) }
+    // Chats the plugin never reported (opened before it was installed, or another tool): from their transcripts.
+    for (id, t) in touched where !loaded.contains(where: { $0.id == id }) && !t.cwd.isEmpty {
+      let ms = t.at.timeIntervalSince1970 * 1000
+      loaded.append(Chat(id: id, cwd: t.cwd, project: (t.cwd as NSString).lastPathComponent, label: "", usd: spend[id]?.total ?? 0,
+                         at: ms, state: .idle, stateAt: ms))
+    }
+    for i in loaded.indices {
+      loaded[i].title = title(for: loaded[i])
+      if let t = touched[loaded[i].id] { loaded[i].touchedAt = t.at.timeIntervalSince1970 * 1000 }
+    }
     let now = nowMs
     chats = loaded.sorted {
       let a = $0.liveState(now: now) == .waiting, b = $1.liveState(now: now) == .waiting
@@ -172,9 +249,11 @@ import UserNotifications
       fmt.dateFormat = "yyyy-MM-dd"
       days = r.days.compactMap { k, v in fmt.date(from: k).map { Day(date: $0, usd: v) } }.sorted { $0.date < $1.date }
       spend = r.chats
+      touched = r.touched
       scanning = false
       writeTotals()
       writeModels()
+      checkBudgetAndRecap()
     }
   }
 

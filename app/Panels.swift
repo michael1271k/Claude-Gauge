@@ -24,9 +24,14 @@ import SwiftUI
   /// Prompt Pad: a floating window that takes typing without pulling Claude Gauge to the front.
   static func showPad() {
     if pad == nil {
-      let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 460),
-                      styleMask: [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel], backing: .buffered, defer: false)
+      let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 480),
+                      styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
       p.title = "Prompt Pad"
+      p.titleVisibility = .hidden
+      p.titlebarAppearsTransparent = true
+      p.isMovableByWindowBackground = true
+      p.standardWindowButton(.miniaturizeButton)?.isHidden = true
+      p.standardWindowButton(.zoomButton)?.isHidden = true
       p.isFloatingPanel = true
       p.hidesOnDeactivate = false
       p.isReleasedWhenClosed = false
@@ -58,7 +63,7 @@ import SwiftUI
 struct MenuPanel: View {
   let store: Store
   @AppStorage("tab") private var tab = GaugeTab.overview.rawValue
-  @AppStorage("theme") private var theme = "Ocean"
+  @AppStorage("theme") private var theme = "Sunset"
 
   var body: some View {
     VStack(alignment: .leading, spacing: 11) {
@@ -66,6 +71,8 @@ struct MenuPanel: View {
       TabSwitch(tab: $tab, agents: store.agentChats.count)
       if tab == GaugeTab.agents.rawValue {
         AgentsView(store: store)
+      } else if tab == GaugeTab.projects.rawValue {
+        ProjectsView(store: store)
       } else {
         LimitsView(store: store)
         SpendChart(store: store, days: 30)
@@ -135,13 +142,15 @@ struct SettingsView: View {
   @AppStorage("widgetShow") private var show = WidgetShow.withClaude.rawValue
   @AppStorage("widgetForm") private var form = WidgetForm.edge.rawValue
   @AppStorage("weekStart") private var weekStart = "Sunday"
+  @AppStorage("dailyBudget") private var dailyBudget = 0.0
+  @AppStorage("widgetSize") private var widgetSize = WidgetSize.auto.rawValue
   @AppStorage("widgetScreens") private var screens = "1"
   @AppStorage("edgeSide") private var side = EdgeSide.right.rawValue
   @AppStorage("pinOnTop") private var pinOnTop = true
   @AppStorage("keepExpanded") private var keepExpanded = false
   @AppStorage("autoOpenOnInput") private var autoOpen = true
   @AppStorage("iconStyle") private var iconStyle = IconStyle.ring.rawValue
-  @AppStorage("theme") private var theme = "Ocean"
+  @AppStorage("theme") private var theme = "Sunset"
   @AppStorage("customAccent") private var customAccent = 0x63D1FF
   @AppStorage("customSecondary") private var customSecondary = 0xFFD63F
   @AppStorage("limitsStyle") private var limits = LimitsStyle.rings.rawValue
@@ -170,10 +179,11 @@ struct SettingsView: View {
           if form == WidgetForm.edge.rawValue {
             Picker("Screen edge", selection: $side) { ForEach(EdgeSide.allCases) { Text($0.rawValue).tag($0.rawValue) } }.pickerStyle(.segmented)
           }
+          Picker("Size", selection: $widgetSize) { ForEach(WidgetSize.allCases) { Text($0.rawValue).tag($0.rawValue) } }
           Toggle("Pin on top of other windows", isOn: $pinOnTop)
           Toggle("Keep expanded", isOn: $keepExpanded)
           Toggle("Open by itself when a chat needs input", isOn: $autoOpen)
-          Text("Drag it anywhere: near the left or right edge it becomes the edge belt, near the bottom the Dock shelf, anywhere else it floats. Drop it on another screen to move it there. Hover a bead to peek at that chat, click for details.")
+          Text("Drag it anywhere: near the left or right edge it becomes the edge belt, anywhere else it floats. Drop it on another screen to move it there. Hover it to see everything, click to keep it open. Hover a bead to peek at that chat. Auto size grows with your display.")
             .font(.caption).foregroundStyle(.secondary)
         }
       }
@@ -222,6 +232,13 @@ struct SettingsView: View {
         Picker("Week starts on", selection: $weekStart) { Text("Sunday").tag("Sunday"); Text("Monday").tag("Monday") }.pickerStyle(.segmented)
         Text("Today resets at midnight, the week on \(weekStart), the month on the 1st. Costs come from Claude's own chat logs, so reopening an old chat never counts it twice.")
           .font(.caption).foregroundStyle(.secondary)
+        TextField("Daily budget ($, 0 = off)", value: $dailyBudget, format: .number)
+        Text("Past the budget, the belt glows red, Today turns red and you get one notification that day. A recap of last week arrives on the first day of each week.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+      Section("Shortcuts") {
+        LabeledContent("Show or hide Claude Gauge") { Text("⌥⌘G").font(.system(.body, design: .rounded)).foregroundStyle(.secondary) }
+        LabeledContent("Open the Prompt Pad") { Text("⌥⌘P").font(.system(.body, design: .rounded)).foregroundStyle(.secondary) }
       }
       Section("General") {
         Toggle("Open Claude Gauge at login", isOn: $atLogin)

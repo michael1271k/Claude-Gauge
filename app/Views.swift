@@ -85,27 +85,31 @@ struct LimitBar: View {
   var marker = false
   var body: some View {
     let pct = limit?.percentUsed ?? 0
-    HStack(spacing: 8) {
-      Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).frame(width: 44, alignment: .leading)
+    let color = Palette.limit(pct, base: Palette.base(for: limit?.kind))
+    HStack(spacing: 9) {
+      Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary).frame(width: 50, alignment: .leading)
       GeometryReader { g in
         ZStack(alignment: .leading) {
-          Capsule().fill(.white.opacity(0.1))
-          Capsule().fill(Palette.limit(pct, base: Palette.base(for: limit?.kind))).frame(width: max(3, g.size.width * min(1, pct / 100)))
+          Capsule().fill(color.opacity(0.16))
+          // Lighter at the start, the full color at the tip: the bar deepens as it fills.
+          Capsule().fill(LinearGradient(colors: [color.opacity(0.55), color], startPoint: .leading, endPoint: .trailing))
+            .frame(width: max(8, g.size.width * min(1, pct / 100)))
+            .shadow(color: color.opacity(0.45), radius: 4)
           if marker, let f = limit?.elapsedFraction {
-            RoundedRectangle(cornerRadius: 1).fill(.white).frame(width: 2, height: 10).offset(x: g.size.width * f - 1)
+            RoundedRectangle(cornerRadius: 1).fill(.white).frame(width: 2.5, height: 14).offset(x: g.size.width * f - 1)
           }
         }
         .frame(maxHeight: .infinity)
       }
-      .frame(height: marker ? 10 : 4)
+      .frame(height: marker ? 14 : 8)
       Text(limit == nil ? "–" : "\(Int(pct.rounded()))%")
-        .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit()).foregroundStyle(Palette.limit(pct, base: Palette.base(for: limit?.kind)))
-        .frame(width: 34, alignment: .trailing)
+        .font(.system(size: 13, weight: .bold, design: .rounded).monospacedDigit()).foregroundStyle(color)
+        .frame(width: 40, alignment: .trailing)
       Text(limit?.resetDate.map { "resets in \(Format.until($0))" } ?? "")
-        .font(.system(size: 10).monospacedDigit()).foregroundStyle(.tertiary).lineLimit(1)
-        .frame(width: 92, alignment: .trailing)
+        .font(.system(size: 10.5).monospacedDigit()).foregroundStyle(.tertiary).lineLimit(1)
+        .frame(width: 96, alignment: .trailing)
     }
-    .frame(height: 16)
+    .frame(height: 20)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("\(title): \(Int(pct.rounded())) percent used, resets in \(Format.until(limit?.resetDate))")
   }
@@ -127,17 +131,23 @@ struct LimitsView: View {
         .frame(maxWidth: .infinity)
       case .bars, .marker:
         let marker = style == LimitsStyle.marker.rawValue
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
           LimitBar(title: "5-hour", limit: store.five, marker: marker)
           LimitBar(title: "Weekly", limit: store.week, marker: marker)
         }
       case .nested:
         NestedRings(five: store.five, week: store.week, size: ringSize * 1.25)
       }
-      if let m = store.paceMinutesLeft, m < 300 {
-        Label("At this pace the 5-hour limit runs out in \(Format.minutes(m))", systemImage: "speedometer")
-          .font(.system(size: 10)).foregroundStyle(m < 45 ? Palette.hot : .secondary)
+      // Pace forecast: when each window runs out at this rate, or how much it leaves at the reset.
+      VStack(alignment: .leading, spacing: 2) {
+        ForEach([store.five, store.week].compactMap { $0 }, id: \.kind) { l in
+          if let f = l.forecast() {
+            Label(f.text, systemImage: f.risky ? "exclamationmark.triangle.fill" : "speedometer")
+              .font(.system(size: 10.5)).foregroundStyle(f.risky ? Palette.hot : Palette.accent.opacity(0.85))
+          }
+        }
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 }
@@ -241,7 +251,7 @@ struct SpendChart: View {
     VStack(alignment: .leading, spacing: 6) {
       if showTotals {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-          total("Today", store.today, Palette.secondary)
+          total("Today", store.today, store.overBudget ? Palette.hot : Palette.secondary)
           total("Week", store.thisWeek, Palette.accent)
           total("Month", store.thisMonth, Palette.chart)
         }

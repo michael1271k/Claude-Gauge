@@ -58,11 +58,13 @@ func readActivity(_ url: URL) -> Activity {
       for b in blocks where b["type"] as? String == "tool_result" {
         if let id = b["tool_use_id"] as? String { results.insert(id); resultAt[id] = at }
       }
-      let text = (msg["content"] as? String) ?? blocks.first { $0["type"] as? String == "text" }?["text"] as? String ?? ""
-      let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
       if blocks.contains(where: { $0["type"] as? String == "tool_result" }) { a.choices = [] } // answered
-      if !t.isEmpty, !t.hasPrefix("<"), (o["isMeta"] as? Bool) != true {
-        a = Activity(prompt: t.replacingOccurrences(of: "\n", with: " "), promptAt: at)
+      // The person's words: every text part with the app's injected <tags>…</tags> removed; the latest prompt wins.
+      let parts = (msg["content"] as? String).map { [$0] } ?? blocks.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }
+      let t = parts.map(stripTags).filter { !$0.isEmpty }.joined(separator: " ")
+      if !t.isEmpty, (o["isMeta"] as? Bool) != true {
+        // Sub-agents still running from an earlier turn stay on the card.
+        a = Activity(prompt: t.replacingOccurrences(of: "\n", with: " "), promptAt: at, agents: a.agents)
         results = []
       }
     } else {
@@ -83,6 +85,7 @@ func readActivity(_ url: URL) -> Activity {
     }
   }
 
+  let promptAt = a.promptAt ?? .distantPast
   // A sub-agent is done once its own transcript goes quiet (background ones), or its result came back.
   let dir = url.deletingPathExtension().appending(path: "subagents")
   var files: [String: URL] = [:]
@@ -99,7 +102,15 @@ func readActivity(_ url: URL) -> Activity {
       a.agents[i].finished = resultAt[id]
     }
   }
+  a.agents.removeAll { $0.finished != nil && $0.started < promptAt }
   return a
+}
+
+/// Removes `<system-reminder>…</system-reminder>`-style blocks and stray tags the apps add around a prompt.
+func stripTags(_ text: String) -> String {
+  var t = text.replacingOccurrences(of: #"<([A-Za-z_-]+)[^>]*>[\s\S]*?</\1>"#, with: "", options: .regularExpression)
+  t = t.replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)
+  return t.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 private func describe(_ name: String, _ input: [String: Any]) -> String {
@@ -122,7 +133,7 @@ private func describe(_ name: String, _ input: [String: Any]) -> String {
 
 // MARK: Views
 
-enum GaugeTab: String, CaseIterable { case overview = "Overview", agents = "Agents" }
+enum GaugeTab: String, CaseIterable { case overview = "Overview", agents = "Agents", projects = "Projects" }
 
 /// Overview | Agents (n) switch under the header, with the Prompt Pad button beside it.
 struct TabSwitch: View {
@@ -195,30 +206,36 @@ struct AgentCard: View {
     VStack(alignment: .leading, spacing: 7) {
       HStack(spacing: 7) {
         stateIcon(s).font(.system(size: 10, weight: .semibold)).foregroundStyle(tint).frame(width: 14)
-        Text(chat.displayTitle).font(.system(size: 12, weight: .semibold)).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+        Text(chat.displayTitle).font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.middle)
         ModelChip(store: store, chat: chat)
         Spacer(minLength: 4)
         Text(s == .done ? "done \(Format.ago(chat.stateAt))" : Format.minutes(max(0, Date().timeIntervalSince(since) / 60)))
           .font(.system(size: 10.5).monospacedDigit()).foregroundStyle(.secondary)
       }
-      let mission = s == .waiting && !chat.question.isEmpty ? chat.question : act.prompt.isEmpty ? chat.label : act.prompt
+      // What it is doing right now, big; what it was asked, small.
+      Text(currentTask(s, act)).font(.system(size: 14, weight: .semibold)).lineLimit(1).truncationMode(.tail)
+        .foregroundStyle(s == .waiting ? AnyShapeStyle(Palette.waiting) : AnyShapeStyle(LinearGradient(colors: [Palette.accent, Palette.secondary], startPoint: .leading, endPoint: .trailing)))
+      let mission = act.prompt.isEmpty ? chat.label : act.prompt
       if !mission.isEmpty {
-        Text(mission).font(.system(size: 11)).foregroundStyle(s == .waiting ? AnyShapeStyle(tint) : AnyShapeStyle(.secondary)).lineLimit(2)
+        Text(mission).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
       }
       ProgressLine(state: s, activity: act)
-      HStack(spacing: 6) {
-        Text(s == .waiting ? "Waiting for you · click to answer" : s == .done ? "Finished" : act.doing.isEmpty ? "Working" : act.doing)
-          .lineLimit(1).truncationMode(.tail)
-        Spacer(minLength: 6)
-        Text(progressText(act, s)).monospacedDigit().layoutPriority(1)
+      if s == .working, act.recent.count > 1 {
+        VStack(alignment: .leading, spacing: 3) {
+          ForEach(Array(act.recent.dropLast().reversed().enumerated()), id: \.offset) { _, step in
+            HStack(spacing: 6) {
+              Circle().fill(.white.opacity(0.3)).frame(width: 4, height: 4)
+              Text(step).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            }
+          }
+        }
       }
-      .font(.system(size: 10.5)).foregroundStyle(.tertiary)
       if !act.agents.isEmpty, s != .done {
         VStack(alignment: .leading, spacing: 3) {
           ForEach(act.agents.suffix(4)) { a in
             HStack(spacing: 6) {
               Circle().fill(a.finished == nil ? Palette.accent : Palette.done).frame(width: 5, height: 5)
-              Text(a.kind).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(.secondary)
+              Text(a.kind).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Palette.secondary)
               Text(a.task).font(.system(size: 10.5)).lineLimit(1)
               Spacer(minLength: 4)
               Text(Format.minutes(max(0, (a.finished ?? .now).timeIntervalSince(a.started) / 60)))
@@ -226,18 +243,30 @@ struct AgentCard: View {
             }
           }
         }
-        .padding(.leading, 2)
+      }
+      HStack {
+        Text(progressText(act, s)).font(.system(size: 10.5).monospacedDigit()).foregroundStyle(.tertiary)
+        Spacer()
+        MoneyPair(today: store.todaySpend(chat), total: store.totalSpend(chat))
       }
     }
-    .padding(10)
-    .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(tint.opacity(hover ? 0.14 : 0.08)))
-    .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(tint.opacity(0.25), lineWidth: 1))
+    .padding(11)
+    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(tint.opacity(hover ? 0.14 : 0.08)))
+    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(tint.opacity(0.28), lineWidth: 1))
     .contentShape(Rectangle())
     .onTapGesture { openChat(chat) }
     .onHover { hover = $0 }
     .accessibilityElement(children: .combine)
     .accessibilityAddTraits(.isButton)
     .accessibilityHint("Opens this chat in Claude")
+  }
+
+  private func currentTask(_ s: ChatState, _ a: Activity) -> String {
+    switch s {
+    case .waiting: chat.question.isEmpty ? "Waiting for your answer" : chat.question
+    case .done: "Finished"
+    default: a.doing.isEmpty ? "Working…" : a.doing
+    }
   }
 
   private func progressText(_ a: Activity, _ s: ChatState) -> String {
