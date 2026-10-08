@@ -44,11 +44,14 @@ Answer `y` to add the marketplace, then choose the **user** scope so the bar app
 ## Using it
 
 - **Menu bar or floating:** click the menu bar icon for the full panel. Click the float button to put Claude Gauge on your screen instead. It is always in one place at a time.
-- **Widget:** drag it anywhere.
-  - Drop it near the left or right edge and it docks there as a slim tab.
-  - Drop it anywhere else and it floats.
+- **Widget:** drag it anywhere; it follows the pointer and glides into place.
+  - Near the left or right edge it becomes the **edge belt**: nested rings for your limits (weekly outside, 5-hour inside) and one bead per running chat.
+  - Near the bottom it becomes the **Dock shelf**, the same belt laid out horizontally.
+  - Anywhere else it floats.
   - Drop it on another display and it moves there.
-  - Hover to peek, click for the full card. It stays open while the pointer is on it.
+  - Hover the rings for limits and a pace forecast ("Weekly runs out around Sat 2:17 at this pace").
+  - Hover a bead to peek at that chat: its last steps while it runs, or its question and answer choices when it needs you (picking one copies it and opens the chat).
+  - Click for the full card. **Keep it open** in the toolbar holds the card open.
 - **Overview tab:**
   - your limits, as rings, bars, bars with a time marker, or nested rings;
   - Today, Week and Month spend, plus a 30-day chart (hover a bar for that day);
@@ -56,9 +59,11 @@ Answer `y` to add the marketplace, then choose the **user** scope so the bar app
   - Click a chat to open it in Claude.
   - Drag a row up or down to reorder.
   - Drag a row left, or right-click it, to pin or hide it.
-- **Agents tab:**
-  - every running chat, with what it was asked to do, what it is doing right now, its sub-agents, and a time estimate when one is possible;
-  - **Prompt notes** below: paste or write prompts you want to send later, then click a note to copy it back.
+- **Agents tab:** every running chat, with what it was asked to do, what it is doing right now, its sub-agents, and a time estimate when one is possible.
+- **Prompt Pad** (note icon next to the tabs): sticky notes for prompts you want to send later.
+  - **+** makes an empty note in a random color; the clipboard button makes one from what you copied.
+  - Click a note to edit it in place; the copy button on its corner copies it.
+  - Drag notes to reorder them.
 - **Sync:** the circular-arrows button asks every open chat to re-read its usage right away.
 - **Settings:** where the widget lives and on which screens; appearance themes and custom colors; the menu bar icon style; limit style; per-state sounds and notifications; and which day the week starts on.
 

@@ -1,25 +1,27 @@
-// Prompt notes: sticky notes for prompts you want to send later. Paste or write one, click it to copy it back.
-// Saved to ~/.claude/gauge/notes.json. Nothing is sent anywhere.
+// Prompt Pad: sticky notes for prompts you want to send later, in their own floating window.
+// Click a note to edit it in place, the copy button copies it, drag to reorder. Saved to ~/.claude/gauge/notes.json.
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct Note: Codable, Identifiable, Hashable {
   var id = UUID().uuidString
-  var title: String
+  var title = ""
   var subtitle = ""
-  var text: String
+  var text = ""
   var color = NoteColor.yellow.rawValue
   var created = Date()
 
-  /// First line of the text, trimmed: the default title.
-  static func title(for text: String) -> String {
+  /// First line of the text, trimmed: shown when the note has no title.
+  var displayTitle: String {
+    if !title.trimmingCharacters(in: .whitespaces).isEmpty { return title }
     let line = text.split(whereSeparator: \.isNewline).first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
-    return line.count > 48 ? String(line.prefix(47)) + "…" : line.isEmpty ? "Untitled prompt" : line
+    return line.isEmpty ? "New note" : line
   }
 }
 
 enum NoteColor: String, CaseIterable {
-  case yellow, pink, mint, sky, lilac
+  case yellow, pink, mint, sky, lilac, peach
   var color: Color {
     switch self {
     case .yellow: Color(hex: 0xFFD966)
@@ -27,6 +29,7 @@ enum NoteColor: String, CaseIterable {
     case .mint: Color(hex: 0x7EE0B5)
     case .sky: Color(hex: 0x8CCBFF)
     case .lilac: Color(hex: 0xC3A6FF)
+    case .peach: Color(hex: 0xFFB38A)
     }
   }
 }
@@ -35,7 +38,7 @@ enum NoteColor: String, CaseIterable {
   static let shared = NoteBook()
   private let url = gaugeDir.appending(path: "notes.json")
   var notes: [Note] = []
-  /// The note just copied, for the "Copied" flash.
+  var editingID: String?
   var copiedID: String?
 
   init() {
@@ -44,30 +47,32 @@ enum NoteColor: String, CaseIterable {
     notes = (try? dec.decode([Note].self, from: Data(contentsOf: url))) ?? []
   }
 
-  private func save() {
+  func save() {
     let enc = JSONEncoder()
     enc.dateEncodingStrategy = .iso8601
     enc.outputFormatting = .prettyPrinted
     try? enc.encode(notes).write(to: url, options: .atomic)
   }
 
-  /// New note from whatever text is on the clipboard; nil when it holds no text.
-  @discardableResult func pasteNew() -> Note? {
-    guard let text = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
-    let colors = NoteColor.allCases
-    let n = Note(title: Note.title(for: text), text: text, color: colors[notes.count % colors.count].rawValue)
+  /// An empty note in a random color, opened for editing.
+  func addEmpty() {
+    let n = Note(color: NoteColor.allCases.randomElement()!.rawValue)
     notes.insert(n, at: 0)
-    save()
-    return n
-  }
-
-  func upsert(_ n: Note) {
-    if let i = notes.firstIndex(where: { $0.id == n.id }) { notes[i] = n } else { notes.insert(n, at: 0) }
+    editingID = n.id
     save()
   }
 
-  func delete(_ n: Note) {
-    notes.removeAll { $0.id == n.id }
+  /// A note holding the clipboard's text; false when the clipboard has none.
+  func paste() -> Bool {
+    guard let text = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return false }
+    notes.insert(Note(text: text, color: NoteColor.allCases.randomElement()!.rawValue), at: 0)
+    save()
+    return true
+  }
+
+  func delete(_ id: String) {
+    notes.removeAll { $0.id == id }
+    if editingID == id { editingID = nil }
     save()
   }
 
@@ -75,44 +80,67 @@ enum NoteColor: String, CaseIterable {
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(n.text, forType: .string)
     copiedID = n.id
-    DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
       if self?.copiedID == n.id { self?.copiedID = nil }
     }
   }
+
+  /// Puts note `id` where `target` is.
+  func move(_ id: String, to target: String) {
+    guard id != target, let from = notes.firstIndex(where: { $0.id == id }), let to = notes.firstIndex(where: { $0.id == target }) else { return }
+    notes.move(fromOffsets: [from], toOffset: to > from ? to + 1 : to)
+    save()
+  }
 }
 
-/// The notes section of the Agents tab: Paste / New, then a two-column grid of sticky notes.
-struct NotesSection: View {
+/// The Prompt Pad window's content.
+struct PromptPad: View {
   @State private var book = NoteBook.shared
   @State private var nothingToPaste = false
+  @AppStorage("theme") private var theme = "Ocean"
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 8) {
-        SectionLabel(text: "Prompt notes")
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(spacing: 6) {
+        Text("Prompts you want to send later. Click a note to edit it.").font(.system(size: 11)).foregroundStyle(.secondary)
         Spacer()
-        if nothingToPaste { Text("Clipboard has no text").font(.system(size: 10)).foregroundStyle(.tertiary).transition(.opacity) }
-        IconButton(symbol: "doc.on.clipboard", hint: "Paste the clipboard as a new note") {
-          if book.pasteNew() == nil {
-            withAnimation { nothingToPaste = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { withAnimation { nothingToPaste = false } }
+        if nothingToPaste { Text("Nothing to paste").font(.system(size: 10)).foregroundStyle(.tertiary) }
+        IconButton(symbol: "doc.on.clipboard", hint: "New note from the clipboard") {
+          if !withAnimation(widgetSpring, { book.paste() }) {
+            nothingToPaste = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { nothingToPaste = false }
           }
         }
-        IconButton(symbol: "square.and.pencil", hint: "Write a new note") { Windows.editNote(nil) }
-      }
-      .font(.system(size: 12))
-      if book.notes.isEmpty {
-        Text("Save prompts for later: copy text anywhere, then paste it here. Click a note to copy it back.")
-          .font(.system(size: 11)).foregroundStyle(.secondary)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(10)
-          .background(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.white.opacity(0.12), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-      } else {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-          ForEach(book.notes) { StickyNote(note: $0, book: book) }
+        .font(.system(size: 12))
+        Button { withAnimation(widgetSpring) { book.addEmpty() } } label: {
+          Image(systemName: "plus").font(.system(size: 12, weight: .bold)).frame(width: 26, height: 26)
+            .background(Circle().fill(Palette.accent)).foregroundStyle(.black)
         }
+        .buttonStyle(.plain).help("New note").accessibilityLabel("New note")
+      }
+      ScrollView {
+        if book.notes.isEmpty {
+          Text("Click + for a new note, or copy a prompt anywhere and use the clipboard button.")
+            .font(.system(size: 11)).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.top, 40)
+        }
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
+          ForEach(book.notes) { note in
+            StickyNote(note: note, book: book)
+              .draggable(note.id) { StickyNote(note: note, book: book).frame(width: 150).opacity(0.85) }
+              .dropDestination(for: String.self) { ids, _ in
+                guard let id = ids.first else { return false }
+                withAnimation(widgetSpring) { book.move(id, to: note.id) }
+                return true
+              }
+          }
+        }
+        .padding(2)
       }
     }
+    .padding(12)
+    .frame(minWidth: 340, minHeight: 300)
+    .tint(Palette.accent)
+    .id(theme)
   }
 }
 
@@ -120,103 +148,77 @@ struct StickyNote: View {
   let note: Note
   let book: NoteBook
   @State private var hover = false
+  @FocusState private var focused: Bool
+
+  private var editing: Bool { book.editingID == note.id }
+  private var binding: Binding<Note> {
+    Binding(get: { book.notes.first { $0.id == note.id } ?? note }, set: { n in
+      if let i = book.notes.firstIndex(where: { $0.id == n.id }) { book.notes[i] = n }
+    })
+  }
 
   var body: some View {
     let tint = NoteColor(rawValue: note.color)?.color ?? NoteColor.yellow.color
-    let copied = book.copiedID == note.id
     VStack(alignment: .leading, spacing: 3) {
-      Text(note.title).font(.system(size: 11.5, weight: .semibold)).lineLimit(2)
-      if !note.subtitle.isEmpty { Text(note.subtitle).font(.system(size: 10, weight: .medium)).opacity(0.7).lineLimit(1) }
-      Text(note.text).font(.system(size: 10)).opacity(0.62).lineLimit(3)
-      Spacer(minLength: 0)
-      HStack(spacing: 4) {
-        Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 9, weight: .bold))
-        Text(copied ? "Copied" : "Click to copy").font(.system(size: 9.5, weight: .semibold))
-      }
-      .opacity(hover || copied ? 0.9 : 0)
+      if editing { editor } else { preview }
     }
     .foregroundStyle(Color(white: 0.1))
-    .padding(9)
-    .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
-    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(tint.opacity(hover ? 1 : 0.92)))
+    .padding(8)
+    .frame(maxWidth: .infinity, minHeight: 78, alignment: .topLeading)
+    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(tint.opacity(hover || editing ? 1 : 0.9)))
     .overlay(alignment: .topTrailing) {
-      if hover {
-        HStack(spacing: 2) {
-          mini("pencil", "Edit") { Windows.editNote(note) }
-          mini("trash", "Delete") { withAnimation(widgetSpring) { book.delete(note) } }
+      if !editing {
+        Button { book.copy(note) } label: {
+          Image(systemName: book.copiedID == note.id ? "checkmark" : "doc.on.doc").font(.system(size: 9, weight: .bold))
+            .frame(width: 20, height: 20).background(Circle().fill(.white.opacity(hover ? 0.7 : 0.45)))
         }
-        .padding(4)
+        .buttonStyle(.plain).foregroundStyle(Color(white: 0.15)).padding(4)
+        .help("Copy").accessibilityLabel("Copy prompt")
       }
     }
-    .rotationEffect(.degrees(hover ? 0 : (note.id.hashValue % 2 == 0 ? -0.8 : 0.8)))
-    .scaleEffect(copied ? 0.97 : 1)
-    .animation(widgetSpring, value: hover)
-    .animation(widgetSpring, value: copied)
+    .shadow(color: .black.opacity(editing ? 0.35 : 0), radius: 8, y: 3)
     .contentShape(Rectangle())
-    .onTapGesture { book.copy(note) }
+    .onTapGesture { if !editing { book.editingID = note.id } }
     .onHover { hover = $0 }
     .contextMenu {
-      Button("Copy prompt") { book.copy(note) }
-      Button("Edit…") { Windows.editNote(note) }
-      Menu("Color") {
-        ForEach(NoteColor.allCases, id: \.self) { c in
-          Button(c.rawValue.capitalized) { var n = note; n.color = c.rawValue; book.upsert(n) }
-        }
-      }
+      Button("Copy") { book.copy(note) }
+      Button("Edit") { book.editingID = note.id }
       Divider()
-      Button("Delete", role: .destructive) { book.delete(note) }
+      Button("Delete", role: .destructive) { withAnimation(widgetSpring) { book.delete(note.id) } }
     }
-    .accessibilityElement(children: .combine)
-    .accessibilityAddTraits(.isButton)
-    .accessibilityHint("Copies the prompt")
+    .animation(widgetSpring, value: editing)
   }
 
-  private func mini(_ symbol: String, _ label: String, _ run: @escaping () -> Void) -> some View {
-    Button(action: run) {
-      Image(systemName: symbol).font(.system(size: 9, weight: .bold)).foregroundStyle(Color(white: 0.15))
-        .frame(width: 20, height: 20).background(Circle().fill(.white.opacity(0.55)))
-    }
-    .buttonStyle(.plain).accessibilityLabel(label)
+  @ViewBuilder private var preview: some View {
+    Text(note.displayTitle).font(.system(size: 11.5, weight: .semibold)).lineLimit(2).padding(.trailing, 20)
+    if !note.subtitle.isEmpty { Text(note.subtitle).font(.system(size: 10, weight: .medium)).opacity(0.7).lineLimit(1) }
+    if !note.text.isEmpty { Text(note.text).font(.system(size: 10)).opacity(0.65).lineLimit(3) }
   }
-}
 
-/// Edits one note in a small real window (the widget never takes keyboard focus).
-struct NoteEditor: View {
-  @State var note: Note
-  let isNew: Bool
-  let close: () -> Void
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      TextField("Title", text: $note.title).textFieldStyle(.roundedBorder).font(.system(size: 13, weight: .semibold))
-      TextField("Subtitle (optional): project, when to use it…", text: $note.subtitle).textFieldStyle(.roundedBorder)
-      TextEditor(text: $note.text)
-        .font(.system(size: 12))
-        .scrollContentBackground(.hidden)
-        .padding(6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color(white: 0.14)))
-        .frame(minHeight: 160)
-      HStack(spacing: 8) {
-        ForEach(NoteColor.allCases, id: \.self) { c in
-          Circle().fill(c.color).frame(width: 18, height: 18)
-            .overlay(Circle().strokeBorder(.white, lineWidth: note.color == c.rawValue ? 2 : 0))
-            .onTapGesture { note.color = c.rawValue }
-            .accessibilityLabel(c.rawValue.capitalized)
-            .accessibilityAddTraits(note.color == c.rawValue ? [.isButton, .isSelected] : .isButton)
-        }
-        Spacer()
-        Button("Cancel", action: close).keyboardShortcut(.cancelAction)
-        Button(isNew ? "Save note" : "Save") {
-          if note.title.trimmingCharacters(in: .whitespaces).isEmpty { note.title = Note.title(for: note.text) }
-          NoteBook.shared.upsert(note)
-          close()
-        }
-        .keyboardShortcut(.defaultAction)
-        .disabled(note.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+  @ViewBuilder private var editor: some View {
+    TextField("Title", text: binding.title).font(.system(size: 11.5, weight: .semibold)).textFieldStyle(.plain)
+    TextField("Subtitle", text: binding.subtitle).font(.system(size: 10, weight: .medium)).textFieldStyle(.plain).opacity(0.75)
+    TextEditor(text: binding.text)
+      .font(.system(size: 10.5)).scrollContentBackground(.hidden).focused($focused)
+      .frame(minHeight: 70)
+      .background(RoundedRectangle(cornerRadius: 5).fill(.white.opacity(0.35)))
+    HStack(spacing: 5) {
+      ForEach(NoteColor.allCases, id: \.self) { c in
+        Circle().fill(c.color).frame(width: 13, height: 13)
+          .overlay(Circle().strokeBorder(Color(white: 0.15), lineWidth: note.color == c.rawValue ? 1.5 : 0.5))
+          .onTapGesture { binding.wrappedValue.color = c.rawValue }
+          .accessibilityLabel(c.rawValue.capitalized)
       }
+      Spacer()
+      Button { withAnimation(widgetSpring) { book.delete(note.id) } } label: { Image(systemName: "trash").font(.system(size: 10, weight: .semibold)) }
+        .buttonStyle(.plain).help("Delete").accessibilityLabel("Delete note")
+      Button("Done") {
+        book.editingID = nil
+        book.save()
+      }
+      .buttonStyle(.plain).font(.system(size: 10.5, weight: .bold))
+      .keyboardShortcut(.defaultAction)
     }
-    .padding(16)
-    .frame(minWidth: 420, minHeight: 320)
-    .tint(Palette.accent)
+    .onAppear { focused = true }
   }
 }

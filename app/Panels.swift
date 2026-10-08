@@ -19,19 +19,24 @@ import SwiftUI
     present(dashboard!)
   }
 
-  private static var noteWindows: [String: NSWindow] = [:]
+  private static var pad: NSPanel?
 
-  /// Opens a small window to write a new note (nil) or edit one.
-  static func editNote(_ note: Note?) {
-    let n = note ?? Note(title: "", text: "")
-    if let w = noteWindows[n.id] { return present(w) }
-    var w: NSWindow!
-    w = make(note == nil ? "New prompt note" : "Edit note", NoteEditor(note: n, isNew: note == nil) { [n] in
-      w.close()
-      noteWindows[n.id] = nil
-    }, size: NSSize(width: 460, height: 360))
-    noteWindows[n.id] = w
-    present(w)
+  /// Prompt Pad: a floating window that takes typing without pulling Claude Gauge to the front.
+  static func showPad() {
+    if pad == nil {
+      let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 460),
+                      styleMask: [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel], backing: .buffered, defer: false)
+      p.title = "Prompt Pad"
+      p.isFloatingPanel = true
+      p.hidesOnDeactivate = false
+      p.isReleasedWhenClosed = false
+      p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+      p.appearance = NSAppearance(named: .darkAqua)
+      p.contentViewController = NSHostingController(rootView: PromptPad().environment(\.colorScheme, .dark))
+      p.center()
+      pad = p
+    }
+    pad?.makeKeyAndOrderFront(nil)
   }
 
   private static func make(_ title: String, _ view: some View, size: NSSize) -> NSWindow {
@@ -56,7 +61,7 @@ struct MenuPanel: View {
   @AppStorage("theme") private var theme = "Ocean"
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
+    VStack(alignment: .leading, spacing: 11) {
       Header(store: store) { EmptyView() }
       TabSwitch(tab: $tab, agents: store.agentChats.count)
       if tab == GaugeTab.agents.rawValue {
@@ -66,19 +71,15 @@ struct MenuPanel: View {
         SpendChart(store: store, days: 30)
         ChatsView(store: store)
       }
-      Divider().opacity(0.4)
-      HStack(spacing: 8) {
-        Button("Open Claude", action: openClaude).buttonStyle(.borderedProminent).controlSize(.small)
-        Spacer()
+      GaugeToolbar {
         SyncButton(store: store)
         IconButton(symbol: "macwindow.on.rectangle", hint: "Float it on the screen") { Prefs.d.set(Placement.floating.rawValue, forKey: "placement") }
         IconButton(symbol: "chart.bar.xaxis", hint: "Dashboard") { Windows.showDashboard() }
         IconButton(symbol: "gearshape", hint: "Settings") { Windows.showSettings() }
         IconButton(symbol: "power", hint: "Quit Claude Gauge") { NSApp.terminate(nil) }
       }
-      .font(.system(size: 13))
     }
-    .padding(18)
+    .padding(16)
     .frame(width: 380)
     .tint(Palette.accent)
     .id(theme)
@@ -172,7 +173,7 @@ struct SettingsView: View {
           Toggle("Pin on top of other windows", isOn: $pinOnTop)
           Toggle("Keep expanded", isOn: $keepExpanded)
           Toggle("Open by itself when a chat needs input", isOn: $autoOpen)
-          Text("Drag it anywhere: drop it near the left or right edge and it docks there; anywhere else it floats. Drop it on another screen to move it there. Hover to peek, click for details.")
+          Text("Drag it anywhere: near the left or right edge it becomes the edge belt, near the bottom the Dock shelf, anywhere else it floats. Drop it on another screen to move it there. Hover a bead to peek at that chat, click for details.")
             .font(.caption).foregroundStyle(.secondary)
         }
       }

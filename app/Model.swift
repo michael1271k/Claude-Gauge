@@ -19,6 +19,23 @@ struct Limit: Codable, Hashable {
     return f.date(from: resetsAt) ?? ISO8601DateFormatter().date(from: resetsAt)
   }
 
+  struct Forecast { let text: String; let risky: Bool }
+
+  /// At the average rate so far in this window: when it runs out, or how much is left at the reset.
+  func forecast(now: Date = .now) -> Forecast? {
+    guard let reset = resetDate, let f = elapsedFraction, f > 0.02, percentUsed > 0, percentUsed < 100 else { return nil }
+    let window: Double = kind == "five_hour" ? 5 * 3600 : 7 * 86_400
+    let perSecond = percentUsed / (f * window)
+    let out = now.addingTimeInterval((100 - percentUsed) / perSecond)
+    let name = kind == "five_hour" ? "5-hour" : "Weekly"
+    if out < reset {
+      let when = Calendar.current.isDateInToday(out) ? out.formatted(.dateTime.hour().minute()) : out.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+      return Forecast(text: "\(name) runs out around \(when) at this pace", risky: true)
+    }
+    let spare = max(0, 100 - percentUsed - perSecond * reset.timeIntervalSince(now))
+    return Forecast(text: "\(name) lasts until it resets, about \(Int(spare))% to spare", risky: false)
+  }
+
   /// How much of the window has passed (0...1): 5 hours or 7 days, counted back from the reset.
   var elapsedFraction: Double? {
     guard let r = resetDate else { return nil }

@@ -243,6 +243,7 @@ struct SpendChart: View {
       } else {
         SectionLabel(text: "\(days)-day spend")
       }
+      Spacer().frame(height: 6)
       Chart(data) { d in
         BarMark(x: .value("Day", d.date, unit: .day), y: .value("USD", d.usd), width: .ratio(0.7))
           .foregroundStyle(Calendar.current.isDateInToday(d.date) || pick?.date == d.date ? Palette.chart : Palette.chart.opacity(0.42))
@@ -344,7 +345,7 @@ struct ChatRow: View {
           Text(chat.question).font(.system(size: 11)).foregroundStyle(tint).lineLimit(1).padding(.leading, 22)
         }
       }
-      .padding(.vertical, 6).padding(.horizontal, 8)
+      .padding(.vertical, 4).padding(.horizontal, 8)
       .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
         .fill(highlight ? tint.opacity(hover ? 0.18 : 0.12) : .white.opacity(hover ? 0.07 : 0)))
       .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(highlight ? tint.opacity(0.3) : .clear, lineWidth: 1))
@@ -398,7 +399,7 @@ struct ChatsView: View {
   var rows = 2
   @State private var dragging: String?
   @State private var dy: CGFloat = 0
-  private let step: CGFloat = 34
+  private let step: CGFloat = 30
 
   var body: some View {
     let ordered = store.rankedChats
@@ -474,6 +475,27 @@ extension Store {
   }
 }
 
+/// The bottom bar: "Open Claude" on the left, icon buttons on the right, on one slim tinted strip.
+struct GaugeToolbar<Icons: View>: View {
+  @ViewBuilder var icons: Icons
+  var body: some View {
+    HStack(spacing: 2) {
+      Button(action: openClaude) {
+        Label("Open Claude", systemImage: "arrow.up.forward.app")
+          .font(.system(size: 11, weight: .semibold))
+          .padding(.horizontal, 9).padding(.vertical, 4)
+          .background(Capsule().fill(Palette.accent))
+          .foregroundStyle(.black)
+      }
+      .buttonStyle(.plain)
+      Spacer(minLength: 4)
+      icons.font(.system(size: 12.5))
+    }
+    .padding(3)
+    .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(.white.opacity(0.06)))
+  }
+}
+
 /// Icon button with a name that appears on hover (system tooltips don't show on a panel that never becomes key).
 struct IconButton: View {
   let symbol: String
@@ -483,7 +505,7 @@ struct IconButton: View {
   @State private var showHint = false
 
   var body: some View {
-    Button(action: action) { Image(systemName: symbol).frame(width: 24, height: 24).contentShape(Rectangle()) }
+    Button(action: action) { Image(systemName: symbol).frame(width: 26, height: 24).contentShape(Rectangle()) }
       .buttonStyle(.plain)
       .foregroundStyle(hover ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
       .onHover { h in

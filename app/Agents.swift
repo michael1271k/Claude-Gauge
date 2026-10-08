@@ -16,6 +16,10 @@ struct Activity: Sendable {
   var promptAt: Date?
   /// "Editing Widget.swift", "Running build.sh", …
   var doing = ""
+  /// The last few steps, newest last (live peek).
+  var recent: [String] = []
+  /// The answer choices of the question Claude is waiting on (quick reply).
+  var choices: [String] = []
   var tools = 0
   var agents: [SubAgent] = []
 
@@ -56,6 +60,7 @@ func readActivity(_ url: URL) -> Activity {
       }
       let text = (msg["content"] as? String) ?? blocks.first { $0["type"] as? String == "text" }?["text"] as? String ?? ""
       let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      if blocks.contains(where: { $0["type"] as? String == "tool_result" }) { a.choices = [] } // answered
       if !t.isEmpty, !t.hasPrefix("<"), (o["isMeta"] as? Bool) != true {
         a = Activity(prompt: t.replacingOccurrences(of: "\n", with: " "), promptAt: at)
         results = []
@@ -66,6 +71,10 @@ func readActivity(_ url: URL) -> Activity {
         let input = b["input"] as? [String: Any] ?? [:]
         a.tools += 1
         a.doing = describe(name, input)
+        a.recent = Array((a.recent + [a.doing]).suffix(3))
+        if name == "AskUserQuestion", let q = (input["questions"] as? [[String: Any]])?.first {
+          a.choices = (q["options"] as? [[String: Any]] ?? []).compactMap { $0["label"] as? String }
+        }
         if name == "Agent" || name == "Task", let id = b["id"] as? String {
           a.agents.append(SubAgent(id: id, kind: input["subagent_type"] as? String ?? "agent",
                                    task: input["description"] as? String ?? "", started: at))
@@ -115,34 +124,38 @@ private func describe(_ name: String, _ input: [String: Any]) -> String {
 
 enum GaugeTab: String, CaseIterable { case overview = "Overview", agents = "Agents" }
 
-/// Overview | Agents (n) switch under the header.
+/// Overview | Agents (n) switch under the header, with the Prompt Pad button beside it.
 struct TabSwitch: View {
   @Binding var tab: String
   let agents: Int
   var body: some View {
-    HStack(spacing: 2) {
-      ForEach(GaugeTab.allCases, id: \.self) { t in
-        let on = tab == t.rawValue
-        Button { withAnimation(widgetSpring) { tab = t.rawValue } } label: {
-          HStack(spacing: 5) {
-            Text(t.rawValue)
-            if t == .agents, agents > 0 {
-              Text("\(agents)").font(.system(size: 9.5, weight: .bold).monospacedDigit())
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(Capsule().fill(Palette.accent.opacity(on ? 0.35 : 0.22)))
+    HStack(spacing: 6) {
+      HStack(spacing: 2) {
+        ForEach(GaugeTab.allCases, id: \.self) { t in
+          let on = tab == t.rawValue
+          Button { withAnimation(widgetSpring) { tab = t.rawValue } } label: {
+            HStack(spacing: 4) {
+              Text(t.rawValue)
+              if t == .agents, agents > 0 {
+                Text("\(agents)").font(.system(size: 9, weight: .bold).monospacedDigit())
+                  .padding(.horizontal, 4).padding(.vertical, 0.5)
+                  .background(Capsule().fill(Palette.accent.opacity(on ? 0.35 : 0.22)))
+              }
             }
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(on ? .primary : .secondary)
+            .frame(maxWidth: .infinity).padding(.vertical, 3)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(on ? 0.12 : 0)))
+            .contentShape(Rectangle())
           }
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(on ? .primary : .secondary)
-          .frame(maxWidth: .infinity).padding(.vertical, 5)
-          .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(.white.opacity(on ? 0.12 : 0)))
-          .contentShape(Rectangle())
+          .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
       }
+      .padding(2)
+      .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.white.opacity(0.05)))
+      IconButton(symbol: "note.text", hint: "Prompt Pad: saved prompts") { Windows.showPad() }
+        .font(.system(size: 12))
     }
-    .padding(2)
-    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(.white.opacity(0.05)))
   }
 }
 
@@ -164,8 +177,7 @@ struct AgentsView: View {
         ForEach(chats.prefix(4)) { AgentCard(chat: $0, store: store) }
         if chats.count > 4 { Text("\(chats.count - 4) more running").font(.system(size: 10)).foregroundStyle(.tertiary) }
       }
-      Divider().opacity(0.3).padding(.vertical, 4)
-      NotesSection()
+
     }
   }
 }

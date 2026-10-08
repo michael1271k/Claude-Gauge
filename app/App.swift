@@ -174,6 +174,16 @@ import UserNotifications
   writePNG(dark(AnyView(PeekCard(store: store).frame(width: 300).glassCard(tint: Palette.waiting).padding(24).background(Color(white: 0.3)))), to: "\(dir)/peek.png")
   writePNG(dark(AnyView(MenuPanel(store: store).background(Color(white: 0.12)))), to: "\(dir)/panel.png")
   store.setSample(.working)
+  let belt = WidgetModel()
+  writePNG(dark(AnyView(HStack(alignment: .top, spacing: 18) {
+    AgentBelt(store: store, model: belt, vertical: true).glassCard(radius: 14)
+    AgentBelt(store: store, model: belt, vertical: false).glassCard(radius: 18)
+    VStack(spacing: 12) {
+      ChatPeek(chat: store.chats[0], store: store).frame(width: 300).glassCard(radius: 20)
+      PeekCard(store: store).frame(width: 300).glassCard(radius: 20)
+    }
+  }.padding(20).background(Color(white: 0.3)))), to: "\(dir)/belt.png")
+  writePNG(dark(AnyView(PromptPad().frame(width: 380, height: 300).background(Color(white: 0.12)))), to: "\(dir)/pad.png")
   writePNG(dark(AnyView(VStack(spacing: 14) {
     AgentsView(store: store)
     ForEach(LimitsStyle.allCases) { st in
@@ -195,6 +205,7 @@ extension Store {
     let limits = [Limit(kind: "five_hour", percentUsed: 38, resetsAt: ISO8601DateFormatter().string(from: .now.addingTimeInterval(8000))),
                   Limit(kind: "seven_day", percentUsed: 74, resetsAt: ISO8601DateFormatter().string(from: .now.addingTimeInterval(300_000)))]
     s.chats = [
+      Chat(id: "d", cwd: "/Users/me/Code/api", project: "api", label: "", usd: 3.2, at: now - 30_000, state: .waiting, stateAt: now - 30_000, question: "Which database should the cache use?", title: "Add a cache layer"),
       Chat(id: "a", cwd: "/Users/me/Code/atlas", project: "atlas", label: "fix login", usd: 1.84, at: now - 60_000, limits: limits, state: .working, stateAt: now - 60_000, title: "Fix the login redirect loop"),
       Chat(id: "b", cwd: "/Users/me/Code/notes", project: "notes", label: "", usd: 0.42, at: now - 600_000, state: .done, stateAt: now - 600_000, title: "Sync notes to iCloud"),
       Chat(id: "c", cwd: "/Users/me/Code/site", project: "site", label: "landing copy", usd: 12.3, at: now - 7_200_000, state: .idle, stateAt: now - 7_200_000),
@@ -209,7 +220,7 @@ extension Store {
                "b": ChatSpend(byDay: [dayKey(.now): 0.42], total: 0.42, model: "claude-haiku-4-5-20251001", effort: "medium")]
     let now2 = Date()
     s.activity["a"] = Activity(prompt: "Fix the login redirect loop and add a regression test for the OAuth callback", promptAt: now2.addingTimeInterval(-840),
-      doing: "Editing AuthCallback.swift", tools: 37, agents: [
+      doing: "Editing AuthCallback.swift", recent: ["Reading AuthCallback.swift", "Running the auth tests", "Editing AuthCallback.swift"], tools: 37, agents: [
         SubAgent(id: "1", kind: "Explore", task: "Map the auth flow", started: now2.addingTimeInterval(-800), finished: now2.addingTimeInterval(-500)),
         SubAgent(id: "2", kind: "general-purpose", task: "Write the regression test", started: now2.addingTimeInterval(-300))])
     return s

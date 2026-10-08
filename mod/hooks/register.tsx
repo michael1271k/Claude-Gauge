@@ -9,7 +9,9 @@ const limits = atom({ plugin: 'usage-gauge', key: 'limits' } as const, [] as Lim
 const usd = atom({ plugin: 'usage-gauge', key: 'usd' } as const, 0)
 const today = atom({ plugin: 'usage-gauge', key: 'today' } as const, -1)
 const cwd = atom({ plugin: 'usage-gauge', key: 'cwd' } as const, '')
-const model = atom({ plugin: 'usage-gauge', key: 'model' } as const, { name: '', effort: '' })
+// name: the model id the last request used; alias: what $.session.model() said then (a switch shows instantly);
+// effort: the last request's effort, else the chat's or settings' default.
+const model = atom({ plugin: 'usage-gauge', key: 'model' } as const, { name: '', effort: '', alias: '', fallback: '' })
 const chat = atom({ plugin: 'usage-gauge', key: 'chat' } as const, { state: 'idle', at: 0, label: '', question: '' })
 
 const GREEN = '#40DB80'
@@ -33,7 +35,7 @@ const until = (iso: string | undefined, now: number) => {
 
 /** "claude-opus-5-5" → "Opus 5.5"; same rule as the app's modelLabel. */
 const modelName = (id: string) => {
-  const parts = id.replace('claude-', '').split(/[-\[]/).filter(p => p && p.length < 8 && !p.endsWith(']'))
+  const parts = id.replace('claude-', '').replace(/\[.*\]$/, '').split('-').filter(p => p && p.length < 8)
   if (!parts.length) return id
   return parts[0][0].toUpperCase() + parts[0].slice(1) + (parts.length > 1 ? ' ' + parts.slice(1).join('.') : '')
 }
@@ -70,6 +72,8 @@ async function writeSession($: any) {
       state: c.state,
       stateAt: c.at,
       question: c.question,
+      model: (await read($, model)).name,
+      effort: (await read($, model)).effort,
     }),
   )
 }
@@ -83,6 +87,10 @@ async function syncShared($: any) {
   if (shared?.limits?.length) await update($, limits, () => shared.limits)
   const t = await readJSON($, `${base}/totals.json`)
   await update($, today, () => (t && now - Number(t.at ?? 0) < 15 * 60_000 ? Number(t.today ?? 0) : -1))
+  // Effort when no request has reported one yet: the app's reading of this chat's transcript, else settings.
+  const fromApp = (await readJSON($, `${base}/models.json`))?.[await $.session.id()]?.effort
+  const fromSettings = (await $.settings.read())?.effortLevel
+  await update($, model, m => ({ ...m, fallback: String(fromApp ?? fromSettings ?? '') }))
 }
 
 async function refresh($: any, given?: { limits: Limit[]; cost?: number }) {
@@ -109,8 +117,8 @@ let lastSync = 0
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await update($, cwd, () => e.cwd)
-    const name = await $.session.model()
-    await update($, model, m => ({ ...m, name }))
+    const alias = await $.session.model()
+    await update($, model, m => ({ ...m, alias, name: '' }))
     void refresh($)
     // Every 10 s: pick up the newest limits and totals, and answer the app's Sync button.
     watch?.()
@@ -137,7 +145,8 @@ export const register: Register = on => {
   on('turn.step', async function* ($, e, next) {
     if (!e.agentId) {
       const effort = typeof e.effort === 'string' ? e.effort : ''
-      await update($, model, () => ({ name: e.model, effort }))
+      const alias = await $.session.model()
+      await update($, model, m => ({ ...m, name: e.model, effort, alias }))
     }
     return yield* next(e)
   })
@@ -182,7 +191,11 @@ export const register: Register = on => {
     const five = ls.find(l => l.kind === 'five_hour')
     const week = ls.find(l => l.kind === 'seven_day')
     const m = await read($, model)
-    if (!five && !week && !m.name) return next(e)
+    // A /model switch shows at once; the exact id and effort follow with the next request.
+    const current = await $.session.model()
+    const shown = m.name && current === m.alias ? m.name : current
+    const effort = (shown === m.name && m.effort) || m.fallback
+    if (!five && !week && !shown) return next(e)
     const now = await $.clock.now()
     const spentToday = await read($, today)
     const wide = (e.props.bodyColumns ?? 100) >= 90
@@ -190,15 +203,15 @@ export const register: Register = on => {
     const sep = <Text color={DIM}>│</Text>
     return (
       <Box flexDirection="row" flexWrap="wrap" columnGap={2} paddingX={1}>
-        {m.name && (
+        {shown && (
           <Text>
-            <Text color={modelColor(m.name)} bold>
-              ◆ {modelName(m.name)}
+            <Text color={modelColor(shown)} bold>
+              ◆ {modelName(shown)}
             </Text>
-            {m.effort && <Text color={SOFT}> · {EFFORT[m.effort] ?? m.effort}</Text>}
+            {effort && <Text color={SOFT}> · {EFFORT[effort] ?? effort} effort</Text>}
           </Text>
         )}
-        {m.name && sep}
+        {shown && sep}
         {five && (
           <Text>
             <Text color={SOFT}>5h </Text>
@@ -206,7 +219,7 @@ export const register: Register = on => {
               {wide ? `${bar(five.percentUsed, 8)} ` : ''}
               {Math.round(five.percentUsed)}%
             </Text>
-            <Text color={DIM}> ↻ {until(five.resetsAt, now)}</Text>
+            {five.resetsAt && <Text color={SOFT}> · {until(five.resetsAt, now)} left</Text>}
           </Text>
         )}
         {week && (
@@ -216,12 +229,12 @@ export const register: Register = on => {
               {wide ? `${bar(week.percentUsed, 6)} ` : ''}
               {Math.round(week.percentUsed)}%
             </Text>
-            <Text color={DIM}> ↻ {until(week.resetsAt, now)}</Text>
+            {week.resetsAt && <Text color={SOFT}> · {until(week.resetsAt, now)} left</Text>}
           </Text>
         )}
         {sep}
         <Text>
-          <Text color={SOFT}>Chat </Text>
+          <Text color={SOFT}>This chat </Text>
           <Text color={CYAN} bold>
             {money(await read($, usd))}
           </Text>

@@ -8,7 +8,7 @@ declare module 'claude-code' {
       usd: number
       today: number
       cwd: string
-      model: { name: string; effort: string }
+      model: { name: string; effort: string; alias: string; fallback: string }
       chat: Chat
     }
   }

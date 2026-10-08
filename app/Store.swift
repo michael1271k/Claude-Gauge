@@ -172,7 +172,17 @@ import UserNotifications
       spend = r.chats
       scanning = false
       writeTotals()
+      writeModels()
     }
+  }
+
+  /// Each chat's model and effort as its transcript records them, for the in-chat bar before its first request.
+  private var lastModels: [String: [String: String]] = [:]
+  private func writeModels() {
+    let m = spend.filter { !$0.value.model.isEmpty }.mapValues { ["model": $0.model, "effort": $0.effort] }
+    guard m != lastModels, let data = try? JSONSerialization.data(withJSONObject: m) else { return }
+    lastModels = m
+    try? data.write(to: gaugeDir.appending(path: "models.json"), options: .atomic)
   }
 
   /// Today / week / month for the mod's in-chat bar.
