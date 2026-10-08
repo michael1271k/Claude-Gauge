@@ -106,7 +106,12 @@ import UserNotifications
     apply()
   }
 
+  /// Creating a status item writes its position to UserDefaults, which calls this again; the guard stops that loop.
+  private var applying = false
   private func apply() {
+    guard !applying else { return }
+    applying = true
+    defer { applying = false }
     let wanted = Prefs.placement == .menuBar
     if wanted, item == nil {
       let i = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)

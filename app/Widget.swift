@@ -328,7 +328,11 @@ final class FirstClickHostingView<V: View>: NSHostingView<V> {
   }
 
   /// Rebuild or update the widgets to match Settings, Claude running, and the connected screens.
+  private var applying = false
   func apply(force: Bool = false) {
+    guard !applying else { return }
+    applying = true
+    defer { applying = false }
     let visible = Prefs.placement == .floating && (Prefs.show == .always || claudeInUse)
     let ids = visible ? targetScreens.map(WidgetInstance.id(of:)) : []
     if force || signature != lastSignature {

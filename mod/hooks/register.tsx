@@ -115,6 +115,17 @@ async function readGit($: any) {
   }
 }
 
+// Opens the Claude Gauge app in the background when a chat starts and it isn't running (any surface:
+// desktop app, terminal, IDE). Silent when the app isn't installed.
+async function launchApp($: any) {
+  try {
+    const running = await $.process.run(['pgrep', '-x', 'Gauge'], { timeoutMs: 3000 })
+    if (running.exitCode !== 0) await $.process.run(['open', '-g', '-b', 'app.claudegauge.mac'], { timeoutMs: 5000 })
+  } catch {
+    // no process access on this surface, or the app isn't installed
+  }
+}
+
 async function refresh($: any, given?: { limits: Limit[]; cost?: number }) {
   const u = given ?? (await $.session.usage().then((x: any) => ({ limits: x.rateLimits, cost: x.cost?.usd })))
   await update($, usd, () => u.cost ?? 0)
@@ -143,6 +154,7 @@ export const register: Register = on => {
     await update($, model, m => ({ ...m, alias, name: '' }))
     void refresh($)
     void readGit($)
+    void launchApp($)
     // Every 10 s: pick up the newest limits and totals, answer the app's Sync button, re-read git.
     watch?.cancel()
     watch = $.clock.every(10_000, () => {
