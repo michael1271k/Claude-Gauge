@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+# Build output
+build/
+*.app
+*.iconset
+# Claude Code writes editor types into loaded mods
+mod/.claude-plugin/types/
+mod/tsconfig.json
+# Editors
+.idea/
+.vscode/

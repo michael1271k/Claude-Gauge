@@ -1,0 +1,8 @@
+{
+  "name": "usage-gauge",
+  "version": "3.0.0",
+  "description": "A live usage bar above the Claude Code chat (model, effort, 5-hour and weekly limits, chat and daily spend) that feeds the Claude Gauge Mac app.",
+  "author": { "name": "Claude Gauge contributors" },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

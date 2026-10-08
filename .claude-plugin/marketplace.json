@@ -1,0 +1,6 @@
+{
+  "name": "usage-gauge",
+  "description": "Claude Gauge: Claude Code usage, limits and running agents at a glance.",
+  "owner": { "name": "Claude Gauge contributors" },
+  "plugins": [{ "name": "usage-gauge", "source": "./mod", "description": "Usage bar above the Claude Code chat; feeds the Claude Gauge Mac app." }]
+}
