@@ -10,8 +10,10 @@ Claude Gauge has two parts that work together:
   - Claude's progress while it works (steps, time, sub-agents done);
   - both limits with time left;
   - context fill;
-  - this chat's and today's spend;
+  - this chat's and today's spend, on the right;
   - the git branch.
+
+  The limit meters show a tick for how much of each window has passed: a fill past the tick means you're using it faster than it refills. The bar uses the colors of the appearance you pick in the app.
 
   It also tells the app what each chat is doing.
 
@@ -70,7 +72,8 @@ Answer `y` to add the marketplace, then choose the **user** scope so the bar app
 - **Agents tab:** every running chat, with what it was asked to do, what it is doing right now, its sub-agents, and a time estimate when one is possible.
 - **Prompt Pad** (note icon next to the tabs): sticky notes for prompts you want to send later.
   - **+** makes an empty note in a random color; the clipboard button makes one from what you copied.
-  - Click a note to edit it in place; the copy button on its corner copies it.
+  - Click a note to edit it in place; the buttons on its corner copy or delete it.
+  - Show notes as a grid, a list, or a horizontal strip.
   - Drag notes to reorder them.
 - **Sync:** the circular-arrows button asks every open chat to re-read its usage right away.
 - **Settings:** where the widget lives and on which screens; appearance themes and custom colors; the menu bar icon style; limit style; per-state sounds and notifications; and which day the week starts on.

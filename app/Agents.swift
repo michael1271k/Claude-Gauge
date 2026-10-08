@@ -143,9 +143,9 @@ struct TabSwitch: View {
               }
             }
             .font(.system(size: 10.5, weight: .semibold))
-            .foregroundStyle(on ? .primary : .secondary)
+            .foregroundStyle(on ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(.secondary))
             .frame(maxWidth: .infinity).padding(.vertical, 3)
-            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.white.opacity(on ? 0.12 : 0)))
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Palette.accent.opacity(on ? 0.2 : 0)))
             .contentShape(Rectangle())
           }
           .buttonStyle(.plain)

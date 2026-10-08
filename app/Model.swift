@@ -197,6 +197,9 @@ enum Palette {
   static let hot = Color(red: 1.0, green: 0.33, blue: 0.33)
   static let warn = Color(red: 1, green: 0.84, blue: 0.25)
   static func level(_ pct: Double) -> Color { pct >= 80 ? hot : pct >= 50 ? warn : done }
+  /// A limit in the theme's color until it runs hot: yellow from 75%, red from 90% (same rule as the in-chat bar).
+  static func limit(_ pct: Double, base: Color) -> Color { pct >= 90 ? hot : pct >= 75 ? warn : base }
+  static func base(for kind: String?) -> Color { kind == "seven_day" ? secondary : accent }
   static func state(_ s: ChatState) -> Color {
     switch s {
     case .waiting: waiting

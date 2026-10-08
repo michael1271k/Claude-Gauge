@@ -62,8 +62,36 @@ final class PassivePanel: NSPanel {
   override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
-final class FirstClickHostingView<V: View>: NSHostingView<V> {
+/// Hosts the widget and moves it: a drag on the card is handled here, before SwiftUI sees it,
+/// so it works on the first click of an inactive app and never fights a SwiftUI gesture.
+final class WidgetHostingView<V: View>: NSHostingView<V> {
+  weak var instance: WidgetInstance?
+  private var dragged = false
   override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+  override func mouseDown(with e: NSEvent) {
+    dragged = false
+    instance?.pressBegan()
+    super.mouseDown(with: e)
+  }
+
+  override func mouseDragged(with e: NSEvent) {
+    if instance?.dragMoved() == true {
+      dragged = true
+      return
+    }
+    super.mouseDragged(with: e)
+  }
+
+  override func mouseUp(with e: NSEvent) {
+    if dragged {
+      dragged = false
+      instance?.dragEnded()
+      return // SwiftUI never sees this release, so nothing under the pointer counts it as a click
+    }
+    instance?.pressEnded()
+    super.mouseUp(with: e)
+  }
 }
 
 /// One widget on one screen.
@@ -90,7 +118,9 @@ final class FirstClickHostingView<V: View>: NSHostingView<V> {
     panel.hasShadow = false
     panel.hidesOnDeactivate = false
     panel.appearance = NSAppearance(named: .darkAqua)
-    panel.contentView = FirstClickHostingView(rootView: WidgetRoot(store: store, model: model, instance: self))
+    let host = WidgetHostingView(rootView: WidgetRoot(store: store, model: model, instance: self))
+    panel.contentView = host
+    host.instance = self
     if Prefs.keepExpanded { model.expansion = .full }
   }
 
@@ -141,31 +171,31 @@ final class FirstClickHostingView<V: View>: NSHostingView<V> {
 
   // MARK: Drag. Raw mouse events, so the widget tracks the pointer exactly; on release it glides into place.
 
-  /// Returns nil for the events the drag consumes.
-  func handleMouse(_ e: NSEvent) -> NSEvent? {
+  func pressBegan() {
     let mouse = NSEvent.mouseLocation
-    switch e.type {
-    case .leftMouseDown:
-      press = (mouse, panel.frame.origin, isHandle(mouse))
-      return e
-    case .leftMouseDragged:
-      guard let p = press, p.handle else { return e }
-      if !model.dragging {
-        guard hypot(mouse.x - p.mouse.x, mouse.y - p.mouse.y) > 4 else { return e }
-        model.dragging = true
-        stickyRect = .null
-        panel.level = .floating
-      }
-      panel.setFrameOrigin(NSPoint(x: p.origin.x + mouse.x - p.mouse.x, y: p.origin.y + mouse.y - p.mouse.y))
-      return nil
-    case .leftMouseUp:
-      press = nil
-      guard model.dragging else { return e }
-      drop(at: mouse)
-      return nil
-    default:
-      return e
+    press = (mouse, panel.frame.origin, isHandle(mouse))
+  }
+
+  func pressEnded() { press = nil }
+
+  /// True while this press is moving the widget (past a 4 pt threshold, on a handle).
+  func dragMoved() -> Bool {
+    guard let p = press, p.handle else { return false }
+    let mouse = NSEvent.mouseLocation
+    if !model.dragging {
+      guard hypot(mouse.x - p.mouse.x, mouse.y - p.mouse.y) > 4 else { return false }
+      model.dragging = true
+      stickyRect = .null
+      panel.level = .floating
     }
+    panel.setFrameOrigin(NSPoint(x: p.origin.x + mouse.x - p.mouse.x, y: p.origin.y + mouse.y - p.mouse.y))
+    return true
+  }
+
+  func dragEnded() {
+    press = nil
+    guard model.dragging else { return }
+    drop(at: NSEvent.mouseLocation)
   }
 
   /// The whole widget is a handle when collapsed or peeking; a full card is moved by its header.
@@ -243,7 +273,7 @@ final class FirstClickHostingView<V: View>: NSHostingView<V> {
       content = c
     case .edge:
       let right = Prefs.side == .right
-      let size = measured.width > 0 && measured.width < 60 ? measured : CGSize(width: 36, height: 80)
+      let size = measured.width > 0 && measured.width < 90 ? measured : CGSize(width: 66, height: 120)
       let f = Prefs.d.object(forKey: "edgeY.\(screenID)") as? Double ?? 0.62
       let cy = min(max(vis.minY + f * vis.height, vis.minY + size.height / 2 + 6), vis.maxY - size.height / 2 - 6)
       // The open card grows down from a belt in the top third, up from one in the bottom third, else both ways.
@@ -251,7 +281,7 @@ final class FirstClickHostingView<V: View>: NSHostingView<V> {
       anchor = Alignment(horizontal: right ? .trailing : .leading, vertical: third > 0.66 ? .top : third < 0.34 ? .bottom : .center)
       content = CGRect(x: right ? vis.maxX - size.width : vis.minX, y: cy - size.height / 2, width: size.width, height: size.height)
     case .dock:
-      let size = measured.height > 0 && measured.height < 60 ? measured : CGSize(width: 120, height: 36)
+      let size = measured.height > 0 && measured.height < 90 ? measured : CGSize(width: 200, height: 66)
       let f = Prefs.d.object(forKey: "dockX.\(screenID)") as? Double ?? 0.5
       let cx = min(max(vis.minX + f * vis.width, vis.minX + size.width / 2 + 6), vis.maxX - size.width / 2 - 6)
       anchor = .bottom
@@ -283,7 +313,6 @@ final class FirstClickHostingView<V: View>: NSHostingView<V> {
   private var claudeInUse: Bool { claudeRunning || chatsActive }
   private var poller: Timer?
   private var clickMonitor: Any?
-  private var dragMonitor: Any?
   private var lastNeedsInput = Date.distantPast
   private var lastSignature = ""
 
@@ -371,20 +400,13 @@ final class FirstClickHostingView<V: View>: NSHostingView<V> {
         self?.instances.filter { $0.model.expansion == .full }.forEach { $0.set(.collapsed) }
       }
     }
-    dragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] e in
-      MainActor.assumeIsolated {
-        guard let inst = self?.instances.first(where: { $0.panel === e.window }) else { return e }
-        return inst.handleMouse(e)
-      }
-    }
   }
 
   private func stopPolling() {
     poller?.invalidate()
     poller = nil
-    for m in [clickMonitor, dragMonitor].compactMap({ $0 }) { NSEvent.removeMonitor(m) }
+    if let m = clickMonitor { NSEvent.removeMonitor(m) }
     clickMonitor = nil
-    dragMonitor = nil
   }
 
   private func tick() {
@@ -438,9 +460,9 @@ struct WidgetRoot: View {
       case .collapsed: collapsed
       case .peek:
         if let id = model.focus, let chat = store.chats.first(where: { $0.id == id }) {
-          ChatPeek(chat: chat, store: store).frame(width: 300)
+          ChatPeek(chat: chat, store: store).frame(width: 360)
         } else {
-          PeekCard(store: store).frame(width: 300)
+          PeekCard(store: store).frame(width: 360)
         }
       case .full: FullCard(store: store, instance: instance).frame(width: 360)
       }
@@ -471,8 +493,8 @@ struct WidgetRoot: View {
   }
 }
 
-/// The belt: nested limit rings, then one bead per running chat. Hover the rings for limits and pace,
-/// a bead for that chat; click a bead to open the chat.
+/// The belt: big nested limit rings (weekly outside, 5-hour inside), then one named bead per active chat.
+/// Hover the rings for limits and pace, a bead for that chat; click a bead to open the chat.
 struct AgentBelt: View {
   let store: Store
   let model: WidgetModel
@@ -480,75 +502,96 @@ struct AgentBelt: View {
 
   var body: some View {
     let chats = Array(store.agentChats.prefix(6))
-    let layout = vertical ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+    let layout = vertical ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
     layout {
-      MiniRings(five: store.five?.percentUsed ?? 0, week: store.week?.percentUsed ?? 0, glow: store.glow)
-        .frame(width: 24, height: 24)
+      MiniRings(five: store.five?.percentUsed, week: store.week?.percentUsed)
+        .frame(width: 50, height: 50)
         .onHover { if $0 { model.focus = nil } }
-        .help("5-hour \(Int(store.five?.percentUsed ?? 0))% · weekly \(Int(store.week?.percentUsed ?? 0))%")
+        .accessibilityLabel("5-hour \(Int(store.five?.percentUsed ?? 0)) percent, weekly \(Int(store.week?.percentUsed ?? 0)) percent")
       if !chats.isEmpty {
-        Capsule().fill(.white.opacity(0.15)).frame(width: vertical ? 16 : 1, height: vertical ? 1 : 16)
+        Capsule().fill(Palette.accent.opacity(0.35)).frame(width: vertical ? 26 : 1.5, height: vertical ? 1.5 : 26)
         ForEach(chats) { c in
-          Bead(state: c.liveState(now: store.nowMs))
-            .frame(width: 16, height: 16)
-            .contentShape(Rectangle().inset(by: -4))
-            .onHover { if $0 { model.focus = c.id } }
-            .onTapGesture { openChat(c) }
-            .accessibilityLabel("\(c.displayTitle), \(c.liveState(now: store.nowMs).rawValue)")
-            .accessibilityAddTraits(.isButton)
+          VStack(spacing: 3) {
+            Bead(state: c.liveState(now: store.nowMs), stateAt: c.stateAt, letter: String(c.displayTitle.prefix(1)).uppercased())
+              .frame(width: 30, height: 30)
+            Text(c.displayTitle)
+              .font(.system(size: 8.5, weight: .medium)).foregroundStyle(.secondary)
+              .lineLimit(2).multilineTextAlignment(.center).frame(width: 54)
+          }
+          .contentShape(Rectangle())
+          .onHover { if $0 { model.focus = c.id } }
+          .onTapGesture { openChat(c) }
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel("\(c.displayTitle), \(c.liveState(now: store.nowMs).rawValue)")
+          .accessibilityAddTraits(.isButton)
         }
       }
     }
-    .padding(vertical ? .vertical : .horizontal, 10)
-    .frame(width: vertical ? 36 : nil, height: vertical ? nil : 36)
+    .padding(vertical ? .vertical : .horizontal, 12)
+    .padding(vertical ? .horizontal : .vertical, 6)
+    .frame(width: vertical ? 66 : nil, height: vertical ? nil : 66)
     .animation(widgetSpring, value: chats.map(\.id))
   }
 }
 
-/// Weekly outside, 5-hour inside, the state dot in the middle.
+/// Weekly outside (secondary color), 5-hour inside (main color); they turn yellow from 75% and red from 90%.
 struct MiniRings: View {
-  let five: Double
-  let week: Double
-  let glow: Glow
+  let five: Double?
+  let week: Double?
   var body: some View {
-    ZStack {
-      ring(week, 24)
-      ring(five, 15)
-      Circle().fill(glow == .idle || glow == .hot ? Color.white.opacity(0.8) : glow.color).frame(width: 5, height: 5)
+    GeometryReader { g in
+      let d = min(g.size.width, g.size.height), lw = d * 0.12
+      ZStack {
+        ring(week, Palette.secondary, d, lw)
+        ring(five, Palette.accent, d - lw * 2.6, lw)
+        Text(five.map { "\(Int($0.rounded()))" } ?? "–")
+          .font(.system(size: d * 0.24, weight: .bold, design: .rounded).monospacedDigit())
+      }
+      .frame(width: d, height: d)
     }
   }
 
-  private func ring(_ pct: Double, _ d: CGFloat) -> some View {
-    ZStack {
-      Circle().stroke(.white.opacity(0.14), lineWidth: 3)
-      Circle().trim(from: 0, to: min(1, max(0.02, pct / 100))).stroke(Palette.level(pct), style: .init(lineWidth: 3, lineCap: .round))
+  private func ring(_ pct: Double?, _ base: Color, _ d: CGFloat, _ lw: CGFloat) -> some View {
+    let p = pct ?? 0
+    let color = p >= 90 ? Palette.hot : p >= 75 ? Palette.warn : base
+    return ZStack {
+      Circle().stroke(color.opacity(0.18), lineWidth: lw)
+      Circle().trim(from: 0, to: min(1, max(0.02, p / 100))).stroke(color, style: .init(lineWidth: lw, lineCap: .round))
         .rotationEffect(.degrees(-90))
     }
-    .frame(width: d - 3, height: d - 3)
+    .frame(width: d - lw, height: d - lw)
   }
 }
 
-/// One running chat: spinning while it works, pulsing orange when it needs you, a green check when done.
+/// One chat, its initial inside: a spinning ring while it works, pulsing orange when it needs you,
+/// green with a check for 10 seconds after it finishes, then quiet again.
 struct Bead: View {
   let state: ChatState
+  let stateAt: Double
+  let letter: String
   var body: some View {
-    let tint = Palette.state(state)
-    TimelineView(.animation(paused: state != .working && state != .waiting || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)) { tl in
+    let justDone = state == .done && Date().timeIntervalSince1970 * 1000 - stateAt < 10_000
+    TimelineView(.animation(paused: (state != .working && state != .waiting && !justDone) || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)) { tl in
       let t = tl.date.timeIntervalSinceReferenceDate
+      let done = state == .done && tl.date.timeIntervalSince1970 * 1000 - stateAt < 10_000
       ZStack {
         switch state {
         case .working:
-          Circle().stroke(tint.opacity(0.25), lineWidth: 2.5)
-          Circle().trim(from: 0, to: 0.3).stroke(tint, style: .init(lineWidth: 2.5, lineCap: .round))
-            .rotationEffect(.degrees(t.truncatingRemainder(dividingBy: 1) * 360))
+          Circle().fill(Palette.accent.opacity(0.14))
+          Circle().stroke(Palette.accent.opacity(0.25), lineWidth: 3)
+          Circle().trim(from: 0, to: 0.28).stroke(Palette.accent, style: .init(lineWidth: 3, lineCap: .round))
+            .rotationEffect(.degrees(t.truncatingRemainder(dividingBy: 1.2) / 1.2 * 360))
+          Text(letter).font(.system(size: 12, weight: .bold, design: .rounded)).foregroundStyle(Palette.accent)
         case .waiting:
-          Circle().fill(tint).scaleEffect(0.8 + 0.2 * (0.5 + 0.5 * sin(t * 4)))
-          Text("!").font(.system(size: 10, weight: .black)).foregroundStyle(.black)
-        case .done:
-          Circle().fill(tint.opacity(0.9))
-          Image(systemName: "checkmark").font(.system(size: 8, weight: .black)).foregroundStyle(.black)
-        case .idle:
-          Circle().stroke(tint, lineWidth: 2)
+          Circle().fill(Palette.waiting).scaleEffect(0.86 + 0.14 * (0.5 + 0.5 * sin(t * 4)))
+          Text("!").font(.system(size: 14, weight: .black, design: .rounded)).foregroundStyle(.black)
+        case .done where done:
+          Circle().fill(Palette.done)
+          Image(systemName: "checkmark").font(.system(size: 12, weight: .black)).foregroundStyle(.black)
+        default:
+          Circle().fill(.white.opacity(0.06))
+          Circle().stroke(.white.opacity(0.22), lineWidth: 1.5)
+          Text(letter).font(.system(size: 12, weight: .semibold, design: .rounded)).foregroundStyle(.secondary)
         }
       }
     }
@@ -582,8 +625,8 @@ struct PeekCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 8) {
-        LiveMark(store: store).frame(width: 22, height: 22)
-        Text("Claude Gauge").font(.system(size: 13, weight: .semibold))
+        LiveMark(store: store).frame(width: 26, height: 26)
+        Text("Claude Gauge").font(.system(size: 15, weight: .semibold))
         Spacer()
         StateBadge(glow: store.glow)
       }
@@ -595,7 +638,7 @@ struct PeekCard: View {
         ForEach([store.five, store.week].compactMap { $0 }, id: \.kind) { l in
           if let f = l.forecast() {
             Label(f.text, systemImage: f.risky ? "exclamationmark.triangle.fill" : "speedometer")
-              .font(.system(size: 10.5)).foregroundStyle(f.risky ? Palette.hot : .secondary)
+              .font(.system(size: 11.5)).foregroundStyle(f.risky ? Palette.hot : Palette.accent.opacity(0.9))
           }
         }
       }
@@ -618,7 +661,7 @@ struct ChatPeek: View {
     VStack(alignment: .leading, spacing: 9) {
       HStack(spacing: 7) {
         stateIcon(s).font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.state(s))
-        Text(chat.displayTitle).font(.system(size: 12.5, weight: .semibold)).lineLimit(2)
+        Text(chat.displayTitle).font(.system(size: 14, weight: .semibold)).lineLimit(2)
         Spacer(minLength: 4)
         ModelChip(store: store, chat: chat)
       }
@@ -642,7 +685,7 @@ struct ChatPeek: View {
           ForEach(Array(act.recent.enumerated()), id: \.offset) { i, step in
             HStack(spacing: 6) {
               Circle().fill(i == act.recent.count - 1 ? Palette.accent : .white.opacity(0.3)).frame(width: 5, height: 5)
-              Text(step).font(.system(size: 11)).lineLimit(1)
+              Text(step).font(.system(size: 12)).lineLimit(1)
                 .foregroundStyle(i == act.recent.count - 1 ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             }
             .transition(.move(edge: .bottom).combined(with: .opacity))

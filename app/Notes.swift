@@ -94,15 +94,32 @@ enum NoteColor: String, CaseIterable {
 }
 
 /// The Prompt Pad window's content.
+enum PadLayout: String, CaseIterable {
+  case grid = "Grid", list = "List", strip = "Strip"
+  var symbol: String {
+    switch self {
+    case .grid: "square.grid.2x2"
+    case .list: "list.bullet"
+    case .strip: "rectangle.split.3x1"
+    }
+  }
+}
+
 struct PromptPad: View {
   @State private var book = NoteBook.shared
   @State private var nothingToPaste = false
   @AppStorage("theme") private var theme = "Ocean"
+  @AppStorage("padLayout") private var layoutRaw = PadLayout.grid.rawValue
+  private var layout: PadLayout { PadLayout(rawValue: layoutRaw) ?? .grid }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 6) {
-        Text("Prompts you want to send later. Click a note to edit it.").font(.system(size: 11)).foregroundStyle(.secondary)
+        Picker("Layout", selection: $layoutRaw) {
+          ForEach(PadLayout.allCases, id: \.self) { Image(systemName: $0.symbol).help($0.rawValue).tag($0.rawValue) }
+        }
+        .pickerStyle(.segmented).labelsHidden().frame(width: 104)
+        Text("\(book.notes.count) note\(book.notes.count == 1 ? "" : "s")").font(.system(size: 11)).foregroundStyle(.secondary)
         Spacer()
         if nothingToPaste { Text("Nothing to paste").font(.system(size: 10)).foregroundStyle(.tertiary) }
         IconButton(symbol: "doc.on.clipboard", hint: "New note from the clipboard") {
@@ -118,35 +135,50 @@ struct PromptPad: View {
         }
         .buttonStyle(.plain).help("New note").accessibilityLabel("New note")
       }
-      ScrollView {
-        if book.notes.isEmpty {
-          Text("Click + for a new note, or copy a prompt anywhere and use the clipboard button.")
-            .font(.system(size: 11)).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.top, 40)
+      if book.notes.isEmpty {
+        Text("Click + for a new note, or copy a prompt anywhere and use the clipboard button.")
+          .font(.system(size: 11)).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.top, 40)
+        Spacer()
+      }
+      switch layout {
+      case .grid:
+        ScrollView {
+          LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) { notes(compact: false) }.padding(2)
         }
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
-          ForEach(book.notes) { note in
-            StickyNote(note: note, book: book)
-              .draggable(note.id) { StickyNote(note: note, book: book).frame(width: 150).opacity(0.85) }
-              .dropDestination(for: String.self) { ids, _ in
-                guard let id = ids.first else { return false }
-                withAnimation(widgetSpring) { book.move(id, to: note.id) }
-                return true
-              }
-          }
-        }
-        .padding(2)
+      case .list:
+        ScrollView { LazyVStack(spacing: 6) { notes(compact: true) }.padding(2) }
+      case .strip:
+        ScrollView(.horizontal) { LazyHStack(alignment: .top, spacing: 8) { notes(compact: false, width: 170) }.padding(2) }
       }
     }
     .padding(12)
-    .frame(minWidth: 340, minHeight: 300)
+    .frame(minWidth: 340, minHeight: 240)
     .tint(Palette.accent)
     .id(theme)
+  }
+}
+
+extension PromptPad {
+  /// Every note, draggable onto another to take its place.
+  @ViewBuilder func notes(compact: Bool, width: CGFloat? = nil) -> some View {
+    ForEach(book.notes) { note in
+      StickyNote(note: note, book: book, compact: compact)
+        .frame(width: width)
+        .draggable(note.id) { StickyNote(note: note, book: book, compact: compact).frame(width: 160).opacity(0.85) }
+        .dropDestination(for: String.self) { ids, _ in
+          guard let id = ids.first else { return false }
+          withAnimation(widgetSpring) { book.move(id, to: note.id) }
+          return true
+        }
+    }
   }
 }
 
 struct StickyNote: View {
   let note: Note
   let book: NoteBook
+  /// List layout: one line of text, shorter card.
+  var compact = false
   @State private var hover = false
   @FocusState private var focused: Bool
 
@@ -164,16 +196,17 @@ struct StickyNote: View {
     }
     .foregroundStyle(Color(white: 0.1))
     .padding(8)
-    .frame(maxWidth: .infinity, minHeight: 78, alignment: .topLeading)
+    .frame(maxWidth: .infinity, minHeight: compact && !editing ? 44 : 78, alignment: .topLeading)
     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(tint.opacity(hover || editing ? 1 : 0.9)))
     .overlay(alignment: .topTrailing) {
       if !editing {
-        Button { book.copy(note) } label: {
-          Image(systemName: book.copiedID == note.id ? "checkmark" : "doc.on.doc").font(.system(size: 9, weight: .bold))
-            .frame(width: 20, height: 20).background(Circle().fill(.white.opacity(hover ? 0.7 : 0.45)))
+        HStack(spacing: 3) {
+          if hover {
+            corner("trash", "Delete note") { withAnimation(widgetSpring) { book.delete(note.id) } }
+          }
+          corner(book.copiedID == note.id ? "checkmark" : "doc.on.doc", "Copy prompt") { book.copy(note) }
         }
-        .buttonStyle(.plain).foregroundStyle(Color(white: 0.15)).padding(4)
-        .help("Copy").accessibilityLabel("Copy prompt")
+        .padding(4)
       }
     }
     .shadow(color: .black.opacity(editing ? 0.35 : 0), radius: 8, y: 3)
@@ -189,10 +222,19 @@ struct StickyNote: View {
     .animation(widgetSpring, value: editing)
   }
 
+  private func corner(_ symbol: String, _ label: String, _ run: @escaping () -> Void) -> some View {
+    Button(action: run) {
+      Image(systemName: symbol).font(.system(size: 9, weight: .bold))
+        .frame(width: 20, height: 20).background(Circle().fill(.white.opacity(hover ? 0.7 : 0.45)))
+    }
+    .buttonStyle(.plain).foregroundStyle(Color(white: 0.15))
+    .help(label).accessibilityLabel(label)
+  }
+
   @ViewBuilder private var preview: some View {
-    Text(note.displayTitle).font(.system(size: 11.5, weight: .semibold)).lineLimit(2).padding(.trailing, 20)
+    Text(note.displayTitle).font(.system(size: 11.5, weight: .semibold)).lineLimit(compact ? 1 : 2).padding(.trailing, 46)
     if !note.subtitle.isEmpty { Text(note.subtitle).font(.system(size: 10, weight: .medium)).opacity(0.7).lineLimit(1) }
-    if !note.text.isEmpty { Text(note.text).font(.system(size: 10)).opacity(0.65).lineLimit(3) }
+    if !note.text.isEmpty { Text(note.text).font(.system(size: 10)).opacity(0.65).lineLimit(compact ? 1 : 3) }
   }
 
   @ViewBuilder private var editor: some View {

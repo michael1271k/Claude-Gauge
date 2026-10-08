@@ -10,7 +10,7 @@ enum LimitsStyle: String, CaseIterable, Identifiable {
 struct SectionLabel: View {
   let text: String
   var body: some View {
-    Text(text.uppercased()).font(.system(size: 10, weight: .semibold)).tracking(0.6).foregroundStyle(.secondary)
+    Text(text.uppercased()).font(.system(size: 10, weight: .bold)).tracking(0.7).foregroundStyle(Palette.accent.opacity(0.85))
   }
 }
 
@@ -36,7 +36,8 @@ struct Header<Trailing: View>: View {
       LiveMark(store: store).frame(width: 30, height: 30)
       VStack(alignment: .leading, spacing: 2) {
         HStack(spacing: 6) {
-          Text("Claude Gauge").font(.system(size: 14, weight: .semibold))
+          Text("Claude Gauge").font(.system(size: 14, weight: .bold))
+            .foregroundStyle(LinearGradient(colors: [Palette.accent, Palette.secondary], startPoint: .leading, endPoint: .trailing))
           StateBadge(glow: store.glow)
         }
         Text(Greeting.now() + (store.updatedAt > 0 ? " · updated \(Format.ago(store.updatedAt))" : ""))
@@ -59,7 +60,7 @@ struct LimitRing: View {
         Circle().stroke(.white.opacity(0.08), lineWidth: size * 0.09)
         Circle()
           .trim(from: 0, to: min(1, pct / 100))
-          .stroke(Palette.level(pct), style: .init(lineWidth: size * 0.09, lineCap: .round))
+          .stroke(Palette.limit(pct, base: Palette.base(for: limit?.kind)), style: .init(lineWidth: size * 0.09, lineCap: .round))
           .rotationEffect(.degrees(-90))
         HStack(alignment: .firstTextBaseline, spacing: 1) {
           Text(limit == nil ? "–" : "\(Int(pct.rounded()))").font(.system(size: size * 0.3, weight: .semibold, design: .rounded).monospacedDigit())
@@ -89,7 +90,7 @@ struct LimitBar: View {
       GeometryReader { g in
         ZStack(alignment: .leading) {
           Capsule().fill(.white.opacity(0.1))
-          Capsule().fill(Palette.level(pct)).frame(width: max(3, g.size.width * min(1, pct / 100)))
+          Capsule().fill(Palette.limit(pct, base: Palette.base(for: limit?.kind))).frame(width: max(3, g.size.width * min(1, pct / 100)))
           if marker, let f = limit?.elapsedFraction {
             RoundedRectangle(cornerRadius: 1).fill(.white).frame(width: 2, height: 10).offset(x: g.size.width * f - 1)
           }
@@ -98,7 +99,7 @@ struct LimitBar: View {
       }
       .frame(height: marker ? 10 : 4)
       Text(limit == nil ? "–" : "\(Int(pct.rounded()))%")
-        .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit()).foregroundStyle(Palette.level(pct))
+        .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit()).foregroundStyle(Palette.limit(pct, base: Palette.base(for: limit?.kind)))
         .frame(width: 34, alignment: .trailing)
       Text(limit?.resetDate.map { "resets in \(Format.until($0))" } ?? "")
         .font(.system(size: 10).monospacedDigit()).foregroundStyle(.tertiary).lineLimit(1)
@@ -169,7 +170,7 @@ struct NestedRings: View {
     return ZStack {
       Circle().stroke(.white.opacity(0.08), lineWidth: width)
       Circle().trim(from: 0, to: min(1, pct / 100))
-        .stroke(Palette.level(pct), style: .init(lineWidth: width, lineCap: .round)).rotationEffect(.degrees(-90))
+        .stroke(Palette.limit(pct, base: Palette.base(for: l?.kind)), style: .init(lineWidth: width, lineCap: .round)).rotationEffect(.degrees(-90))
     }
     .frame(width: diameter, height: diameter)
   }
@@ -181,7 +182,7 @@ struct NestedRings: View {
         Text(inner ? "Inner" : "Outer").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
         Text(title).font(.system(size: 11, weight: .medium))
         Text(l == nil ? "–" : "\(Int(pct.rounded()))%").font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
-          .foregroundStyle(Palette.level(pct))
+          .foregroundStyle(Palette.limit(pct, base: Palette.base(for: l?.kind)))
       }
       Text(l?.resetDate.map { "resets in \(Format.until($0))" } ?? " ").font(.system(size: 10).monospacedDigit()).foregroundStyle(.tertiary)
     }
@@ -217,6 +218,10 @@ struct SpendChart: View {
   var showTotals = true
   @State private var selected: Date?
 
+  private func hot(_ d: Day) -> Bool {
+    Calendar.current.isDateInToday(d.date) || selected.map { Calendar.current.isDate($0, inSameDayAs: d.date) } == true
+  }
+
   /// Label and amount side by side when they fit, else stacked; never wrapped mid-number.
   private func total(_ label: String, _ v: Double, _ tint: Color) -> some View {
     let name = Text(label).font(.system(size: 10.5, weight: .medium)).foregroundStyle(.secondary)
@@ -237,8 +242,8 @@ struct SpendChart: View {
       if showTotals {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
           total("Today", store.today, Palette.secondary)
-          total("Week", store.thisWeek, .primary)
-          total("Month", store.thisMonth, .primary)
+          total("Week", store.thisWeek, Palette.accent)
+          total("Month", store.thisMonth, Palette.chart)
         }
       } else {
         SectionLabel(text: "\(days)-day spend")
@@ -246,7 +251,8 @@ struct SpendChart: View {
       Spacer().frame(height: 6)
       Chart(data) { d in
         BarMark(x: .value("Day", d.date, unit: .day), y: .value("USD", d.usd), width: .ratio(0.7))
-          .foregroundStyle(Calendar.current.isDateInToday(d.date) || pick?.date == d.date ? Palette.chart : Palette.chart.opacity(0.42))
+          .foregroundStyle(LinearGradient(colors: [Palette.chart.opacity(hot(d) ? 1 : 0.55), Palette.secondary.opacity(hot(d) ? 0.95 : 0.45)],
+                                          startPoint: .bottom, endPoint: .top))
           .cornerRadius(2)
       }
       .chartXSelection(value: $selected)
@@ -300,7 +306,7 @@ struct MoneyPair: View {
       Text(Format.money(today)).foregroundStyle(today > 0 ? AnyShapeStyle(Palette.secondary) : AnyShapeStyle(.tertiary))
         .frame(width: MoneyColumns.today, alignment: .trailing)
       Text("|").foregroundStyle(.quaternary)
-      Text(Format.money(total)).foregroundStyle(.primary).frame(width: MoneyColumns.total, alignment: .trailing)
+      Text(Format.money(total)).foregroundStyle(Palette.accent).frame(width: MoneyColumns.total, alignment: .trailing)
     }
     .font(.system(size: 12.5, weight: .semibold, design: .rounded).monospacedDigit())
     .lineLimit(1).minimumScaleFactor(0.8)
@@ -507,7 +513,7 @@ struct IconButton: View {
   var body: some View {
     Button(action: action) { Image(systemName: symbol).frame(width: 26, height: 24).contentShape(Rectangle()) }
       .buttonStyle(.plain)
-      .foregroundStyle(hover ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+      .foregroundStyle(hover ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(Palette.accent.opacity(0.7)))
       .onHover { h in
         hover = h
         withAnimation(.easeOut(duration: 0.15).delay(h ? 0.3 : 0)) { showHint = h }
@@ -538,6 +544,10 @@ struct GlassCard: ViewModifier {
     let shape = UnevenRoundedRectangle(cornerRadii: corners, style: .continuous)
     content
       .background { shape.fill(reduce ? AnyShapeStyle(Color(white: 0.11)) : AnyShapeStyle(.regularMaterial)) }
+      .background {
+        shape.fill(LinearGradient(colors: [Palette.accent.opacity(0.10), .clear, Palette.secondary.opacity(0.07)],
+                                  startPoint: .topLeading, endPoint: .bottomTrailing))
+      }
       .overlay { shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.22), .white.opacity(0.05)], startPoint: .top, endPoint: .bottom), lineWidth: 1) }
       .overlay { shape.strokeBorder(tint.opacity(0.55), lineWidth: 1) }
       .shadow(color: .black.opacity(0.35), radius: 16, y: 8)

@@ -12,6 +12,8 @@ declare module 'claude-code' {
       chat: Chat
       work: { start: number; steps: number }
       git: { branch: string; changed: number }
+      theme: { accent: string; secondary: string }
+      tick: number
     }
   }
 }

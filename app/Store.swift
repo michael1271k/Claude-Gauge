@@ -2,6 +2,7 @@
 import AppKit
 import Foundation
 import Observation
+import SwiftUI
 import UserNotifications
 
 @MainActor @Observable final class Store {
@@ -112,6 +113,7 @@ import UserNotifications
     announceChanges()
     if Date().timeIntervalSince(lastScan) > 3 { scanSpend() }
     if Date().timeIntervalSince(lastActivity) > 2 { refreshActivity() }
+    writeTheme()
   }
 
   /// Re-reads the running chats' transcript tails off the main thread.
@@ -183,6 +185,17 @@ import UserNotifications
     guard m != lastModels, let data = try? JSONSerialization.data(withJSONObject: m) else { return }
     lastModels = m
     try? data.write(to: gaugeDir.appending(path: "models.json"), options: .atomic)
+  }
+
+  /// The appearance's colors for the in-chat bar (theme.json), written when they change.
+  private var lastTheme = ""
+  private func writeTheme() {
+    let t = Theme.current
+    let hex = { (c: Color) in String(format: "#%06X", c.hex) }
+    let json = "{\"accent\":\"\(hex(t.accent))\",\"secondary\":\"\(hex(t.secondary))\"}"
+    guard json != lastTheme else { return }
+    lastTheme = json
+    try? json.write(to: gaugeDir.appending(path: "theme.json"), atomically: true, encoding: .utf8)
   }
 
   /// Today / week / month for the mod's in-chat bar.

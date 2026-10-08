@@ -15,6 +15,10 @@ const model = atom({ plugin: 'usage-gauge', key: 'model' } as const, { name: '',
 // The current turn: when it started and how many tool calls it made (the bar's progress).
 const work = atom({ plugin: 'usage-gauge', key: 'work' } as const, { start: 0, steps: 0 })
 const git = atom({ plugin: 'usage-gauge', key: 'git' } as const, { branch: '', changed: 0 })
+// The app's appearance (Settings → Appearance), from ~/.claude/gauge/theme.json.
+const theme = atom({ plugin: 'usage-gauge', key: 'theme' } as const, { accent: '#63D1FF', secondary: '#FFD63F' })
+// Ticks once a second while Claude works, so the spinner and timer move.
+const tick = atom({ plugin: 'usage-gauge', key: 'tick' } as const, 0)
 const chat = atom({ plugin: 'usage-gauge', key: 'chat' } as const, { state: 'idle', at: 0, label: '', question: '' })
 
 const GREEN = '#40DB80'
@@ -24,10 +28,16 @@ const CYAN = '#63D1FF'
 const SOFT = '#C9CED6'
 const DIM = '#7D8590'
 
-const level = (p: number) => (p >= 80 ? RED : p >= 50 ? YELLOW : GREEN)
-const bar = (p: number, w: number) => {
-  const n = Math.max(0, Math.min(w, Math.round((p / 100) * w)))
-  return '▰'.repeat(n) + '▱'.repeat(w - n)
+/** The theme color until a window runs hot: yellow from 75%, red from 90%. */
+const warn = (p: number, base: string) => (p >= 90 ? RED : p >= 75 ? YELLOW : base)
+const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+/** Context fill as a filling circle. */
+const pie = (p: number) => (p >= 88 ? '●' : p >= 63 ? '◕' : p >= 38 ? '◑' : p >= 13 ? '◔' : '○')
+/** How much of the window has passed (0...1), from its reset time. */
+const passed = (l: Limit, now: number) => {
+  if (!l.resetsAt) return -1
+  const win = l.kind === 'five_hour' ? 5 * 3600_000 : 7 * 86_400_000
+  return Math.min(1, Math.max(0, 1 - (Date.parse(l.resetsAt) - now) / win))
 }
 const money = (v: number) =>
   v >= 1000 ? `$${Math.round(v).toLocaleString('en-US')}` : v >= 100 ? `$${v.toFixed(0)}` : v >= 10 ? `$${v.toFixed(1)}` : `$${v.toFixed(2)}`
@@ -94,6 +104,8 @@ async function syncShared($: any) {
   const now = await $.clock.now()
   const shared = await readJSON($, `${base}/limits.json`)
   if (shared?.limits?.length) await update($, limits, () => shared.limits)
+  const th = await readJSON($, `${base}/theme.json`)
+  if (th?.accent) await update($, theme, () => ({ accent: String(th.accent), secondary: String(th.secondary ?? th.accent) }))
   const t = await readJSON($, `${base}/totals.json`)
   await update($, today, () => (t && now - Number(t.at ?? 0) < 15 * 60_000 ? Number(t.today ?? 0) : -1))
   // Effort when no request has reported one yet: the app's reading of this chat's transcript, else settings.
@@ -144,6 +156,7 @@ async function setState($: any, state: string, question = '') {
 }
 
 let poll: { cancel: () => void } | null = null
+let pulse: { cancel: () => void } | null = null
 let watch: { cancel: () => void } | null = null
 let lastSync = 0
 
@@ -201,12 +214,16 @@ export const register: Register = on => {
     await setState($, 'working')
     poll?.cancel()
     poll = $.clock.every(2000, () => void refresh($))
+    pulse?.cancel()
+    pulse = $.clock.every(1000, () => void update($, tick, n => n + 1))
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
     poll?.cancel()
     poll = null
+    pulse?.cancel()
+    pulse = null
     const out = await next(e)
     await setState($, 'done')
     await refresh($)
@@ -223,7 +240,8 @@ export const register: Register = on => {
     return out
   })
 
-  // The usage bar above the chat input: one line, most useful first, trimmed on narrow windows.
+  // The usage bar above the chat input, one line. Left: model, what Claude is doing, limits, context.
+  // Right: what this chat and today cost, and the branch. Colors follow the app's appearance.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const ls = await read($, limits)
@@ -237,6 +255,8 @@ export const register: Register = on => {
     if (!five && !week && !shown) return next(e)
     const now = await $.clock.now()
     const cols = e.props.bodyColumns ?? 100
+    const { accent, secondary } = await read($, theme)
+    const n = await read($, tick)
     const spentToday = await read($, today)
     const c = await read($, chat)
     const w = await read($, work)
@@ -245,77 +265,113 @@ export const register: Register = on => {
     const agents = c.state === 'working' ? await $.agent.list().catch(() => []) : []
     const running = agents.filter((a: any) => a.status === 'running' || a.status === 'pending').length
     const { Box, Text } = $.ui.resolve(e)
-    const sep = <Text color={DIM}> │ </Text>
-    const limit = (label: string, l: Limit, cells: number) => (
-      <Text wrap="truncate-end">
-        <Text color={DIM}>{label} </Text>
-        {cols >= 110 && <Text color={level(l.percentUsed)}>{bar(l.percentUsed, cells)} </Text>}
-        <Text color={level(l.percentUsed)} bold>
-          {Math.round(l.percentUsed)}%
+    const gap = <Text color={DIM}>{'  '}</Text>
+
+    // A thin track filled to the usage, with a tick where the window's time is: fill past the tick = burning fast.
+    const meter = (label: string, l: Limit, base: string) => {
+      const cells = cols >= 120 ? 10 : cols >= 100 ? 6 : 0
+      const fill = Math.round((Math.min(100, l.percentUsed) / 100) * cells)
+      const t = passed(l, now)
+      const at = t < 0 ? -1 : Math.min(cells - 1, Math.round(t * cells))
+      const color = warn(l.percentUsed, base)
+      const track = Array.from({ length: cells }, (_, i) =>
+        i === at ? (
+          <Text key={`t${i}`} color={SOFT}>
+            ┃
+          </Text>
+        ) : (
+          <Text key={`t${i}`} color={i < fill ? color : '#3A3F47'}>
+            ━
+          </Text>
+        ),
+      )
+      return (
+        <Text wrap="truncate-end">
+          <Text color={DIM}>{label} </Text>
+          {track}
+          <Text color={color} bold>
+            {' '}
+            {Math.round(l.percentUsed)}%
+          </Text>
+          {l.resetsAt && <Text color={DIM}> {until(l.resetsAt, now)}</Text>}
         </Text>
-        {l.resetsAt && <Text color={DIM}> {until(l.resetsAt, now)}</Text>}
-      </Text>
-    )
-    return (
-      <Box flexDirection="row" flexWrap="nowrap" paddingX={1} overflow="hidden">
+      )
+    }
+
+    const left = (
+      <Box flexDirection="row" flexWrap="nowrap" flexShrink={1}>
         {shown && (
           <Text wrap="truncate-end">
-            <Text color={modelColor(shown)} bold>
-              ◆ {modelName(shown)}
+            <Text color={modelColor(shown)}>◆ </Text>
+            <Text color={accent} bold>
+              {modelName(shown)}
             </Text>
             {effort && <Text color={SOFT}> {EFFORT[effort] ?? effort}</Text>}
           </Text>
         )}
         {c.state === 'working' && w.start > 0 && (
           <Text wrap="truncate-end">
-            {sep}
-            <Text color={CYAN}>● </Text>
-            <Text color={SOFT}>
-              {w.steps} steps · {elapsed(now - w.start)}
-            </Text>
+            {gap}
+            <Text color={accent}>{SPIN[n % SPIN.length]} </Text>
+            <Text color={SOFT}>{elapsed(now - w.start)}</Text>
+            <Text color={DIM}> · {w.steps} steps</Text>
             {agents.length > 0 && (
-              <Text color={SOFT}>
-                {' '}· {agents.length - running}/{agents.length} agents
+              <Text color={DIM}>
+                {' '}· <Text color={secondary}>{agents.length - running}</Text>/{agents.length} agents
               </Text>
             )}
           </Text>
         )}
         {c.state === 'waiting' && (
           <Text wrap="truncate-end">
-            {sep}
+            {gap}
             <Text color={YELLOW} bold>
-              ● needs you
+              ● Needs your answer
             </Text>
           </Text>
         )}
-        {five && sep}
-        {five && limit('5h', five, 5)}
-        {week && sep}
-        {week && limit('Wk', week, 5)}
-        {ctx != null && cols >= 100 && sep}
+        {five && gap}
+        {five && meter('5h', five, accent)}
+        {week && gap}
+        {week && meter('Week', week, secondary)}
+        {ctx != null && cols >= 100 && gap}
         {ctx != null && cols >= 100 && (
-          <Text wrap="truncate-end">
-            <Text color={DIM}>Ctx </Text>
-            <Text color={ctx >= 85 ? RED : ctx >= 65 ? YELLOW : SOFT}>{Math.round(ctx)}%</Text>
+          <Text wrap="truncate-end" color={ctx >= 85 ? RED : ctx >= 65 ? YELLOW : SOFT}>
+            {pie(ctx)} <Text color={DIM}>ctx </Text>
+            {Math.round(ctx)}%
           </Text>
         )}
-        {sep}
+      </Box>
+    )
+
+    const right = (
+      <Box flexDirection="row" flexWrap="nowrap" flexShrink={0}>
         <Text wrap="truncate-end">
-          <Text color={CYAN} bold>
+          <Text color={accent} bold>
             {money(await read($, usd))}
           </Text>
           <Text color={DIM}> chat</Text>
-          {spentToday >= 0 && <Text color={DIM}> · </Text>}
-          {spentToday >= 0 && <Text color={YELLOW}>{money(spentToday)}</Text>}
+          {spentToday >= 0 && <Text color={DIM}>{'  '}</Text>}
+          {spentToday >= 0 && (
+            <Text color={secondary} bold>
+              {money(spentToday)}
+            </Text>
+          )}
           {spentToday >= 0 && <Text color={DIM}> today</Text>}
         </Text>
-        {g.branch && cols >= 130 && sep}
         {g.branch && cols >= 130 && (
-          <Text wrap="truncate-end" color={SOFT}>
-            ⎇ {g.branch}
-            {g.changed > 0 && <Text color={YELLOW}> +{g.changed}</Text>}
+          <Text wrap="truncate-end" color={DIM}>
+            {'  '}⎇ {g.branch}
+            {g.changed > 0 && <Text color={secondary}> +{g.changed}</Text>}
           </Text>
         )}
+      </Box>
+    )
+
+    return (
+      <Box flexDirection="row" flexWrap="nowrap" justifyContent="space-between" paddingX={1} overflow="hidden">
+        {left}
+        {right}
       </Box>
     )
   })
