@@ -19,6 +19,8 @@ const git = atom({ plugin: 'usage-gauge', key: 'git' } as const, { branch: '', c
 const theme = atom({ plugin: 'usage-gauge', key: 'theme' } as const, { accent: '#63D1FF', secondary: '#FFD63F' })
 // Ticks once a second while Claude works, so the spinner and timer move.
 const tick = atom({ plugin: 'usage-gauge', key: 'tick' } as const, 0)
+// Set when the app answered Claude's question, so the engine's dialog steps aside.
+const answered = atom({ plugin: 'usage-gauge', key: 'answered' } as const, false)
 const chat = atom({ plugin: 'usage-gauge', key: 'chat' } as const, { state: 'idle', at: 0, label: '', question: '' })
 
 const GREEN = '#40DB80'
@@ -76,7 +78,7 @@ async function readJSON($: any, path: string) {
 
 async function writeSession($: any) {
   const id = await $.session.id()
-  const dir = await read($, cwd)
+  const dir = (await read($, cwd)) || (await $.session.cwd())
   const c = await read($, chat)
   await $.fs.write(
     `${await root($)}/sessions/${id}.json`,
@@ -161,6 +163,14 @@ async function setState($: any, state: string, question = '') {
 }
 
 let poll: { cancel: () => void } | null = null
+let lastMark = 0
+// Records, at most once a minute, that this chat drew the bar (for checking where it shows).
+async function markDrawn($: any) {
+  const now = await $.clock.now()
+  if (now - lastMark < 60_000) return
+  lastMark = now
+  await $.fs.write(`${await root($)}/drawn/${await $.session.id()}`, String(now))
+}
 let inbox: { cancel: () => void } | null = null
 let turnActive = false
 let pulse: { cancel: () => void } | null = null
@@ -258,16 +268,49 @@ export const register: Register = on => {
     if (!(e as any).agentId) await update($, work, w => ({ ...w, steps: w.steps + 1 }))
     if (e.tool !== 'AskUserQuestion' && e.tool !== 'ExitPlanMode') return next(e)
     const qs = (e as any).questions
-    await setState($, 'waiting', Array.isArray(qs) ? String(qs[0]?.question ?? '') : 'Plan ready for review')
-    const out = await next(e)
+    const question = Array.isArray(qs) ? String(qs[0]?.question ?? '') : ''
+    await setState($, 'waiting', question || 'Plan ready for review')
+    if (e.tool !== 'AskUserQuestion' || !question) {
+      const out = await next(e)
+      await setState($, 'working')
+      return out
+    }
+    // The question can be answered here or from the Claude Gauge app; whichever comes first wins.
+    await update($, answered, () => false)
+    const path = `${await root($)}/inbox/${await $.session.id()}.answer.json`
+    const askedAt = await $.clock.now()
+    const poller: { timer?: { cancel: () => void } } = {}
+    const fromApp = new Promise<string>(resolve => {
+      poller.timer = $.clock.every(1000, () => {
+        void (async () => {
+          const m = await readJSON($, path)
+          if (m?.answer && !m.handled && Number(m.at) >= askedAt) {
+            await $.fs.write(path, JSON.stringify({ ...m, handled: true }))
+            resolve(String(m.answer))
+          }
+        })()
+      })
+    })
+    const winner = await Promise.race([next(e).then(out => ({ out })), fromApp.then(answer => ({ answer }))])
+    poller.timer?.cancel()
     await setState($, 'working')
-    return out
+    if ('out' in winner) return winner.out
+    await update($, answered, () => true)
+    return { result: { questions: qs, answers: { [question]: winner.answer } } } as any
+  })
+
+  // Answered from the app: the dialog has nothing left to ask.
+  on('ui.render', { component: 'AskUserQuestion' }, async ($, e, next) => {
+    if (!(await read($, answered))) return next(e)
+    const { Box } = $.ui.resolve(e)
+    return <Box />
   })
 
   // The usage bar above the chat input, one line. Left: model, what Claude is doing, limits, context.
   // Right: what this chat and today cost, and the branch. Colors follow the app's appearance.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
+    void markDrawn($)
     const ls = await read($, limits)
     const five = ls.find(l => l.kind === 'five_hour')
     const week = ls.find(l => l.kind === 'seven_day')

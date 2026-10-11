@@ -63,11 +63,11 @@ enum WidgetSize: String, CaseIterable, Identifiable {
   /// Auto grows with the display: 1× on a laptop, up to 1.5× on a large monitor.
   func scale(for screen: NSScreen?) -> CGFloat {
     switch self {
-    case .auto: min(1.5, max(1, (screen?.frame.height ?? 900) / 1050))
+    case .auto: min(1.2, max(1, (screen?.frame.height ?? 900) / 1250))
     case .small: 0.9
-    case .medium: 1.1
-    case .large: 1.3
-    case .xl: 1.5
+    case .medium: 1.05
+    case .large: 1.2
+    case .xl: 1.35
     }
   }
 }
@@ -302,7 +302,7 @@ final class WidgetHostingView<V: View>: NSHostingView<V> {
       content = c
     case .edge:
       let right = Prefs.side == .right
-      let size = measured.width > 0 && measured.width < 90 * scale ? measured : CGSize(width: 66 * scale, height: 120 * scale)
+      let size = measured.width > 0 && measured.width < 90 * scale ? measured : CGSize(width: 56 * scale, height: 110 * scale)
       let f = Prefs.d.object(forKey: "edgeY.\(screenID)") as? Double ?? 0.62
       let cy = min(max(vis.minY + f * vis.height, vis.minY + size.height / 2 + 6), vis.maxY - size.height / 2 - 6)
       // The open card grows down from a belt in the top third, up from one in the bottom third, else both ways.
@@ -532,10 +532,10 @@ struct AgentBelt: View {
 
   var body: some View {
     let chats = Array(store.agentChats.prefix(6))
-    let layout = vertical ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
+    let layout = vertical ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
     layout {
       MiniRings(five: store.five?.percentUsed, week: store.week?.percentUsed)
-        .frame(width: 50, height: 50)
+        .frame(width: 42, height: 42)
         .onHover { if $0 { model.focus = nil } }
         .accessibilityLabel("5-hour \(Int(store.five?.percentUsed ?? 0)) percent, weekly \(Int(store.week?.percentUsed ?? 0)) percent")
       if !chats.isEmpty {
@@ -543,10 +543,10 @@ struct AgentBelt: View {
         ForEach(chats) { c in
           VStack(spacing: 3) {
             Bead(state: c.liveState(now: store.nowMs), stateAt: c.stateAt, letter: String(c.displayTitle.prefix(1)).uppercased())
-              .frame(width: 30, height: 30)
+              .frame(width: 26, height: 26)
             Text(c.displayTitle)
               .font(.system(size: 8.5, weight: .medium)).foregroundStyle(.secondary)
-              .lineLimit(2).multilineTextAlignment(.center).frame(width: 54)
+              .lineLimit(2).multilineTextAlignment(.center).frame(width: 48)
           }
           .contentShape(Rectangle())
           .onHover { if $0 { model.focus = c.id } }
@@ -557,9 +557,9 @@ struct AgentBelt: View {
         }
       }
     }
-    .padding(vertical ? .vertical : .horizontal, 12)
-    .padding(vertical ? .horizontal : .vertical, 6)
-    .frame(width: vertical ? 66 : nil, height: vertical ? nil : 66)
+    .padding(vertical ? .vertical : .horizontal, 10)
+    .padding(vertical ? .horizontal : .vertical, 5)
+    .frame(width: vertical ? 56 : nil, height: vertical ? nil : 56)
     .overlay {
       // Over today's budget: a slow red glow around the belt.
       if store.overBudget {
@@ -681,12 +681,10 @@ struct ChatPeek: View {
           .font(.system(size: 11.5)).foregroundStyle(Palette.waiting).fixedSize(horizontal: false, vertical: true)
         if !act.choices.isEmpty {
           FlowChips(items: act.choices) { choice in
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(choice, forType: .string)
+            store.answer(chat, choice)
             copied = choice
-            openChat(chat)
           }
-          Text(copied == nil ? "Pick an answer: it's copied and the chat opens, ready to paste." : "Copied “\(copied!)”. Paste it in the chat.")
+          Text(copied == nil ? "Pick an answer and it goes straight to Claude." : "Answered “\(copied!)”.")
             .font(.system(size: 10)).foregroundStyle(.tertiary)
         }
       case .working:
@@ -711,7 +709,7 @@ struct ChatPeek: View {
         MoneyPair(today: store.todaySpend(chat), total: store.totalSpend(chat))
       }
     }
-    .padding(14)
+    .padding(12)
   }
 }
 
@@ -743,7 +741,7 @@ struct FullCard: View {
   @AppStorage("tab") private var tab = GaugeTab.overview.rawValue
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 11) {
+    VStack(alignment: .leading, spacing: 9) {
       Header(store: store) {
         Button { instance.set(.collapsed) } label: {
           Image(systemName: "arrow.down.right.and.arrow.up.left").font(.system(size: 10, weight: .bold))
@@ -773,6 +771,6 @@ struct FullCard: View {
         IconButton(symbol: "gearshape", hint: "Settings") { Windows.showSettings() }
       }
     }
-    .padding(14)
+    .padding(12)
   }
 }

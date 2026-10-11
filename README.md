@@ -59,7 +59,7 @@ Answer `y` to add the marketplace, then choose the **user** scope so the bar app
   - Anywhere else it floats.
   - Drop it on another display and it moves there.
   - Hover it and the full card opens; move away and it closes; click to keep it open.
-  - Hover a bead to peek at that chat: its last steps while it runs, or its question and answer choices when it needs you (picking one copies it and opens the chat).
+  - Hover a bead to peek at that chat: its last steps while it runs, or its question with answer buttons when it needs you. Picking one answers Claude directly.
   - **Keep it open** in the toolbar holds the card open. Clicking an unpinned widget brings it to the front.
   - **Size** (Settings): Auto grows with your display, or pick Small to Extra large.
 - **Overview tab:**
@@ -69,7 +69,7 @@ Answer `y` to add the marketplace, then choose the **user** scope so the bar app
   - Click a chat to open it in Claude.
   - Drag a row up or down to reorder.
   - Drag a row left, or right-click it, to pin or hide it.
-- **Agents tab:** every running chat (including chats opened before the plugin was installed, and background sub-agents still working after a turn), with what it is doing right now in large type, its latest request, its last steps, its sub-agents, and a time estimate when one is possible.
+- **Agents tab:** grouped by project; every running chat (including chats opened before the plugin was installed, and background sub-agents still working after a turn), with what it is doing right now in large type, its latest request, its last steps, its sub-agents with what each one cost, answer buttons when it's waiting on you, and a time estimate when one is possible.
 - **Projects tab:** this week's spend per project (the chat's folder), today's share, and a 14-day sparkline.
 - **Prompt Pad** (note icon next to the tabs): sticky notes for prompts you want to send later.
   - **+** makes an empty note in a random color; the clipboard button makes one from what you copied.

@@ -14,6 +14,7 @@ declare module 'claude-code' {
       git: { branch: string; changed: number }
       theme: { accent: string; secondary: string }
       tick: number
+      answered: boolean
     }
   }
 }

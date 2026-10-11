@@ -10,6 +10,8 @@ struct ChatSpend: Sendable {
   var effort = ""
   /// The chat's working directory (its project).
   var cwd = ""
+  /// Sub-agent transcript path → its share of the chat's cost.
+  var agentCost: [String: Double] = [:]
 }
 
 actor Ledger {
@@ -67,8 +69,13 @@ actor Ledger {
           cost = known > 0 ? cost.mapValues { $0 * l / known } : ["": l]
         }
         let byDay = Ledger.allocate(cost: cost, weights: weights)
+        // Each sub-agent's cost: its replies' token weight as a share of the whole chat's.
+        let weightOf = { (p: String) in self.files[p].map { $0.replies.values.reduce(0) { $0 + $1.weight } } ?? 0 }
+        let all = paths.map(weightOf).reduce(0, +)
+        let usd = cost.values.reduce(0, +)
+        let agentCost = all > 0 ? Dictionary(uniqueKeysWithValues: paths.dropFirst().map { ($0, usd * weightOf($0) / all) }) : [:]
         saved[id] = byDay
-        chats[id] = ChatSpend(byDay: byDay, total: byDay.values.reduce(0, +), model: main.model, effort: main.effort, cwd: main.cwd)
+        chats[id] = ChatSpend(byDay: byDay, total: byDay.values.reduce(0, +), model: main.model, effort: main.effort, cwd: main.cwd, agentCost: agentCost)
       }
     }
     persist()

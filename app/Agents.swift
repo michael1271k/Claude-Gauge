@@ -4,6 +4,8 @@ import SwiftUI
 
 struct SubAgent: Identifiable, Sendable {
   let id: String
+  /// Its own transcript, when found (for its cost).
+  var file: String?
   let kind: String
   let task: String
   let started: Date
@@ -78,7 +80,7 @@ func readActivity(_ url: URL) -> Activity {
           a.choices = (q["options"] as? [[String: Any]] ?? []).compactMap { $0["label"] as? String }
         }
         if name == "Agent" || name == "Task", let id = b["id"] as? String {
-          a.agents.append(SubAgent(id: id, kind: input["subagent_type"] as? String ?? "agent",
+          a.agents.append(SubAgent(id: id, file: nil, kind: input["subagent_type"] as? String ?? "agent",
                                    task: input["description"] as? String ?? "", started: at))
         }
       }
@@ -96,6 +98,7 @@ func readActivity(_ url: URL) -> Activity {
   }
   for i in a.agents.indices {
     let id = a.agents[i].id
+    a.agents[i].file = files[id]?.path
     if let f = files[id], let m = (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate {
       if Date().timeIntervalSince(m) > 45 { a.agents[i].finished = m }
     } else if results.contains(id) {
@@ -185,8 +188,18 @@ struct AgentsView: View {
         }
         .frame(maxWidth: .infinity).padding(.vertical, 14)
       } else {
-        ForEach(chats.prefix(4)) { AgentCard(chat: $0, store: store) }
-        if chats.count > 4 { Text("\(chats.count - 4) more running").font(.system(size: 10)).foregroundStyle(.tertiary) }
+        // Grouped by project, busiest project first.
+        let groups = Dictionary(grouping: chats.prefix(6), by: \.displayProject).sorted { $0.value.count > $1.value.count }
+        ForEach(groups, id: \.key) { name, list in
+          HStack(spacing: 6) {
+            Image(systemName: "folder.fill").font(.system(size: 9)).foregroundStyle(Palette.secondary)
+            Text(name).font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.secondary)
+            Text("\(list.count)").font(.system(size: 10, weight: .bold).monospacedDigit()).foregroundStyle(.tertiary)
+          }
+          .padding(.top, 2)
+          ForEach(list) { AgentCard(chat: $0, store: store) }
+        }
+        if chats.count > 6 { Text("\(chats.count - 6) more running").font(.system(size: 10)).foregroundStyle(.tertiary) }
       }
 
     }
@@ -238,11 +251,17 @@ struct AgentCard: View {
               Text(a.kind).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Palette.secondary)
               Text(a.task).font(.system(size: 10.5)).lineLimit(1)
               Spacer(minLength: 4)
+              if let usd = a.file.flatMap({ store.spend[chat.id]?.agentCost[$0] }), usd >= 0.01 {
+                Text(Format.money(usd)).font(.system(size: 10, weight: .semibold).monospacedDigit()).foregroundStyle(Palette.accent)
+              }
               Text(Format.minutes(max(0, (a.finished ?? .now).timeIntervalSince(a.started) / 60)))
                 .font(.system(size: 10).monospacedDigit()).foregroundStyle(.tertiary)
             }
           }
         }
+      }
+      if s == .waiting, !act.choices.isEmpty {
+        FlowChips(items: act.choices) { store.answer(chat, $0) }
       }
       HStack {
         Text(progressText(act, s)).font(.system(size: 10.5).monospacedDigit()).foregroundStyle(.tertiary)

@@ -128,6 +128,14 @@ import UserNotifications
     return out.values.filter { $0.usd > 0.005 }.sorted { $0.usd > $1.usd }
   }
 
+  /// Answers the question a chat is waiting on; its plugin picks this up within a second.
+  func answer(_ c: Chat, _ choice: String) {
+    let dir = gaugeDir.appending(path: "inbox")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let msg: [String: Any] = ["answer": choice, "at": nowMs, "handled": false]
+    if let data = try? JSONSerialization.data(withJSONObject: msg) { try? data.write(to: dir.appending(path: "\(c.id).answer.json"), options: .atomic) }
+  }
+
   func todaySpend(_ c: Chat) -> Double { spend[c.id]?.byDay[dayKey(.now)] ?? 0 }
   func totalSpend(_ c: Chat) -> Double { max(c.usd, spend[c.id]?.total ?? 0) }
   func modelText(_ c: Chat) -> String { spend[c.id].map { modelLabel($0.model, effort: $0.effort) } ?? "" }
